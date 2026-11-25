@@ -1,0 +1,78 @@
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">AI</span><div><strong>AI Document Digest</strong><small>Enterprise Review</small></div></div>
+  <nav><button [class.active]="activeTab() === 'Dashboard'" (click)="setTab('Dashboard')">Dashboard</button><button [class.active]="activeTab() === 'History'" (click)="setTab('History')">History</button></nav>
+  <div class="profile"><span>NP</span><div><strong>Nina Patel</strong><small>Reviewer</small></div></div>
+</header>
+
+<main>
+  <section class="heading">
+    <div><p>DOCUMENT REVIEW</p><h1>Executive Review</h1><span>Evidence-based document analysis</span></div>
+  </section>
+
+  <section class="ingestion">
+    <label class="dropzone">
+      <input type="file" accept=".md,.txt,.html,.json,.xml" (change)="selectFile($event)">
+      <strong>{{ fileName() || 'Upload a document' }}</strong>
+      <small>Markdown, TXT, HTML, JSON or XML</small>
+    </label>
+    <div class="usecase">
+      <label>Use-case text <span>Optional</span></label>
+      <textarea rows="4" [ngModel]="useCase()" (ngModelChange)="useCase.set($event)" placeholder="Paste or describe the use case for this review..."></textarea>
+    </div>
+    <button class="analyse" [disabled]="loading() || (!selectedFile() && !useCase().trim())" (click)="analyse()">
+      {{ loading() ? 'Analysing...' : 'Start analysis' }}
+    </button>
+  </section>
+
+  @if (result(); as data) {
+    <section class="cards">
+      <article><small>Critical Risks</small><strong>{{ data.criticalRisks.length }}</strong></article>
+      <article><small>High Priority</small><strong>{{ data.highPriorityItems.length }}</strong></article>
+      <article><small>Human Review</small><strong>{{ data.humanReviewRequired.length }}</strong></article>
+      <article><small>Dependencies</small><strong>{{ data.dependencies.length }}</strong></article>
+      <article><small>Contradictions</small><strong>{{ data.contradictions.length }}</strong></article>
+      <article><small>Confidence</small><strong>{{ data.confidenceScore }}%</strong></article>
+    </section>
+
+    <section class="summary">
+      <div>
+        <p>EXECUTIVE SUMMARY</p>
+        <h2>{{ data.documentTitle }}</h2>
+        <span>{{ data.executiveSummary }}</span>
+      </div>
+      <button (click)="exportJson()">Export JSON</button>
+    </section>
+
+    <section class="findings">
+      <div class="section-heading"><div><p>KEY FINDINGS</p><h2>Evidence-backed review</h2></div><span>{{ findings().length }} findings</span></div>
+      @for (finding of findings(); track finding.id) {
+        <article class="finding" [class.critical]="finding.priority === 'Critical'">
+          <div class="finding-main">
+            <div><span class="priority" [class]="finding.priority.toLowerCase()">{{ finding.priority }}</span><span class="agent">{{ finding.agentName }}</span></div>
+            <h3>{{ finding.title }}</h3>
+            <p>{{ finding.description }}</p>
+          </div>
+          @if (finding.evidence) {
+            <div class="evidence">
+              <small>Evidence · Lines {{ finding.evidence.sourceLineStart }}–{{ finding.evidence.sourceLineEnd }}</small>
+              <blockquote>{{ finding.evidence.sourceText }}</blockquote>
+              <button (click)="jumpToSource(finding.evidence)">Jump to source</button>
+            </div>
+          }
+        </article>
+      }
+      @if (!findings().length) {
+        <div class="empty">No evidence-backed findings were identified.</div>
+      }
+    </section>
+
+    @if (data.contradictions.length) {
+      <section class="contradictions">
+        <p>CONTRADICTIONS</p>
+        @for (item of data.contradictions; track item.evidenceA.statementId) {
+          <div><strong>{{ item.finding.description }}</strong><blockquote>A: {{ item.evidenceA.sourceText }}</blockquote><blockquote>B: {{ item.evidenceB.sourceText }}</blockquote></div>
+        }
+      </section>
+    }
+  }
+</main>
