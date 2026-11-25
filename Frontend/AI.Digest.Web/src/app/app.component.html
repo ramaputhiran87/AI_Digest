@@ -24,6 +24,10 @@
     </button>
   </section>
 
+  @if (apiError()) {
+    <section class="api-error">{{ apiError() }}</section>
+  }
+
   @if (result(); as data) {
     <section class="cards">
       <article><small>Critical Risks</small><strong>{{ data.criticalRisks.length }}</strong></article>

@@ -71,6 +71,7 @@ export class AppComponent {
   fileName = signal('');
   selectedFile = signal<File | null>(null);
   loading = signal(false);
+  apiError = signal('');
   activeTab = signal('Digest');
   result = signal<DigestResult | null>(null);
   findings = computed(() => {
@@ -104,6 +105,7 @@ export class AppComponent {
   analyse() {
     if (!this.selectedFile() && !this.useCase().trim()) return;
     this.loading.set(true);
+    this.apiError.set('');
     if (this.selectedFile()) {
       const form = new FormData();
       form.append('file', this.selectedFile()!);
@@ -111,7 +113,12 @@ export class AppComponent {
       this.http.post<DigestResult>('http://127.0.0.1:5050/api/documents/analyse', form)
         .subscribe({
           next: value => this.result.set(value),
-          error: () => this.result.set(this.demoResult()),
+          error: (error) => {
+            this.result.set(null);
+            this.apiError.set(error.status
+              ? `Analysis failed (${error.status}). Check that the API is running on port 5050.`
+              : 'Analysis API is unavailable.');
+          },
           complete: () => this.loading.set(false)
         });
     } else {
@@ -121,7 +128,12 @@ export class AppComponent {
         useCase: this.useCase()
       }).subscribe({
         next: value => this.result.set(value),
-        error: () => this.result.set(this.demoResult()),
+        error: (error) => {
+          this.result.set(null);
+          this.apiError.set(error.status
+            ? `Analysis failed (${error.status}). Check that the API is running on port 5050.`
+            : 'Analysis API is unavailable.');
+        },
         complete: () => this.loading.set(false)
       });
     }

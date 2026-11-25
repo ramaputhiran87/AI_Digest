@@ -22,7 +22,7 @@ public sealed class AgentServices
     [
         "requires review", "under discussion", "approval required", "unresolved",
         "ownership unclear", "not finalized", "undecided", "requires business decision",
-        "pending executive approval"
+        "pending executive approval", "human review", "human review agent"
     ];
 
     private static readonly Dictionary<string, (string Type, string Priority, int Score)> ExplicitLabels =
@@ -45,20 +45,20 @@ public sealed class AgentServices
     public List<Finding> RequirementAgent(ParsedDocument document) =>
         ScanExplicit(document, "RequirementAgent",
             new[] { "Requirement", "Decision", "Approval", "Action", "Dependency", "Blocker" },
-            new[] { "must", "shall", "required", "acceptance criteria", "ambiguous", "missing requirement", "incomplete" });
+            new[] { "must", "shall", "required", "requirement", "acceptance criteria", "ambiguous", "missing requirement", "incomplete", "requirement agent" });
 
     public List<Finding> SecurityAgent(ParsedDocument document) =>
         ScanPatterns(document, "Security", "SecurityAgent", CriticalTerms,
-            new[] { "authentication", "authorization", "encryption", "owasp", "attack", "secret", "password", "credentials" });
+            new[] { "authentication", "authorization", "encryption", "owasp", "attack", "secret", "password", "credentials", "security", "security agent" });
 
     public List<Finding> ComplianceAgent(ParsedDocument document) =>
         ScanPatterns(document, "Compliance", "ComplianceAgent",
-            new[] { "gdpr", "hipaa", "pci", "soc2", "governance", "compliance", "regulatory" },
+            new[] { "gdpr", "hipaa", "pci", "soc2", "governance", "compliance", "regulatory", "compliance agent" },
             Array.Empty<string>());
 
     public List<Finding> BusinessImpactAgent(ParsedDocument document) =>
         ScanPatterns(document, "ProductionImpact", "BusinessImpactAgent",
-            new[] { "revenue", "customer", "sla", "outage", "production", "operational", "deployment" },
+            new[] { "revenue", "customer", "sla", "outage", "production", "operational", "deployment", "business impact", "business impact agent" },
             Array.Empty<string>());
 
     public List<Finding> HumanReviewAgent(ParsedDocument document)
