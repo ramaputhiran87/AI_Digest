@@ -34,6 +34,11 @@ interface DigestResult {
   contradictions: { finding: Finding; evidenceA: Evidence; evidenceB: Evidence }[];
   humanReviewRequired: Finding[];
   recommendations: Finding[];
+  keyFindings: Finding[];
+  hiddenRisks: Finding[];
+  futureRisks: Finding[];
+  strategicOpportunities: Finding[];
+  actionItems: Finding[];
   confidenceScore: number;
   confidenceBand: string;
   evidence: Evidence[];
@@ -82,7 +87,12 @@ export class AppComponent {
       ...data.highPriorityItems,
       ...data.dependencies,
       ...data.humanReviewRequired,
-      ...data.recommendations
+      ...data.recommendations,
+      ...data.hiddenRisks,
+      ...data.futureRisks,
+      ...data.strategicOpportunities,
+      ...data.actionItems,
+      ...data.keyFindings
     ];
     return items.filter((item, index, list) =>
       list.findIndex(candidate => candidate.id === item.id) === index);
@@ -160,6 +170,22 @@ export class AppComponent {
     );
   }
 
+  exportMarkdown() {
+    const data = this.result();
+    if (!data) return;
+    const findings = this.findings();
+    const markdown = [
+      `# Executive Review: ${data.documentTitle}`,
+      '',
+      data.executiveSummary,
+      '',
+      ...findings.map(finding =>
+        `## ${finding.priority}: ${finding.title}\n\n${finding.description}\n\nAgent: ${finding.agentName} · Confidence: ${finding.confidence}% · Source: ${finding.evidence?.section}, line ${finding.evidence?.sourceLineStart}\n\n> ${finding.evidence?.sourceText ?? ''}`
+      )
+    ].join('\n');
+    this.download(markdown, 'text/markdown', `${data.documentTitle.replace(/\.[^.]+$/, '')}_Review.md`);
+  }
+
   private download(content: string, type: string, name: string) {
     const url = URL.createObjectURL(new Blob([content], { type }));
     const anchor = document.createElement('a');
@@ -180,6 +206,11 @@ export class AppComponent {
       contradictions: [],
       humanReviewRequired: [],
       recommendations: [],
+      keyFindings: [],
+      hiddenRisks: [],
+      futureRisks: [],
+      strategicOpportunities: [],
+      actionItems: [],
       confidenceScore: 45,
       confidenceBand: 'Weak Evidence',
       evidence: []

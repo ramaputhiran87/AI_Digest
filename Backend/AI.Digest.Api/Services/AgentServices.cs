@@ -8,8 +8,9 @@ public sealed class AgentServices
     private static readonly string[] CriticalTerms =
     [
         "password", "credentials", "secret", "apikey", "api key", "token", "pii", "ssn",
-        "gdpr", "pci", "hipaa", "data breach", "vulnerability", "unencrypted", "sha1",
-        "outage", "ransomware", "critical", "security approval missing"
+        "gdpr", "pci", "hipaa", "data breach", "breach", "vulnerability", "unencrypted", "sha1",
+        "outage", "service disruption", "data loss", "ransomware", "critical", "security approval missing",
+        "security failure"
     ];
 
     private static readonly string[] HighTerms =
@@ -22,7 +23,8 @@ public sealed class AgentServices
     [
         "requires review", "under discussion", "approval required", "unresolved",
         "ownership unclear", "not finalized", "undecided", "requires business decision",
-        "pending executive approval", "human review", "human review agent"
+        "business decision required", "executive approval required", "pending executive approval",
+        "human review"
     ];
 
     private static readonly Dictionary<string, (string Type, string Priority, int Score)> ExplicitLabels =
@@ -34,11 +36,11 @@ public sealed class AgentServices
             ["Risk"] = ("Risk", "High", 82),
             ["Dependency"] = ("Dependency", "Medium", 55),
             ["Blocker"] = ("Blocker", "High", 88),
-            ["Security"] = ("Security", "Critical", 95),
-            ["Compliance"] = ("Compliance", "Critical", 92),
+            ["Security"] = ("Security", "High", 82),
+            ["Compliance"] = ("Compliance", "High", 82),
             ["Requirement"] = ("Requirement", "High", 78),
             ["Recommendation"] = ("Recommendation", "Low", 30),
-            ["ProductionImpact"] = ("ProductionImpact", "Critical", 94),
+            ["ProductionImpact"] = ("ProductionImpact", "High", 78),
             ["Human Review"] = ("HumanReview", "High", 72)
         };
 
@@ -49,17 +51,125 @@ public sealed class AgentServices
 
     public List<Finding> SecurityAgent(ParsedDocument document) =>
         ScanPatterns(document, "Security", "SecurityAgent", CriticalTerms,
-            new[] { "authentication", "authorization", "encryption", "owasp", "attack", "secret", "password", "credentials", "security", "security agent" });
+            new[] { "authentication", "authorization", "encryption", "owasp", "attack", "secret", "password", "credentials", "malware", "audit logging", "api security" });
 
     public List<Finding> ComplianceAgent(ParsedDocument document) =>
         ScanPatterns(document, "Compliance", "ComplianceAgent",
-            new[] { "gdpr", "hipaa", "pci", "soc2", "governance", "compliance", "regulatory", "compliance agent" },
-            Array.Empty<string>());
+            new[] { "gdpr", "hipaa", "pci", "regulatory" },
+            new[] { "soc2", "governance", "compliance", "compliance gap" });
 
     public List<Finding> BusinessImpactAgent(ParsedDocument document) =>
         ScanPatterns(document, "ProductionImpact", "BusinessImpactAgent",
-            new[] { "revenue", "customer", "sla", "outage", "production", "operational", "deployment", "business impact", "business impact agent" },
-            Array.Empty<string>());
+            new[] { "outage", "service disruption", "data loss" },
+            new[] { "revenue", "customer impact", "sla", "production", "operational impact", "deployment", "business impact" });
+
+    public List<Finding> DreamAgent(ParsedDocument document) =>
+        CreateDerivedFindings(document, "Opportunity", "A process improvement opportunity is evidenced by manual or repetitive work.",
+            "DreamAgent", "Low", 55,
+            ["manual", "repetitive", "paper-based", "spreadsheet-based", "time-consuming", "automate"]);
+
+    public List<Finding> DarkMatterAgent(ParsedDocument document)
+    {
+        var terms = new (string Name, string[] Controls)[]
+        {
+            ("Monitoring", ["monitoring", "observability", "alerting"]),
+            ("Disaster recovery", ["disaster recovery", "recovery plan", "dr plan"]),
+            ("Rollback", ["rollback", "roll back"]),
+            ("Ownership", ["owner", "ownership", "accountable"])
+        };
+        var allText = string.Join(" ", document.Statements.Select(statement => statement.Text));
+        var scope = document.Statements.FirstOrDefault(statement =>
+            Regex.IsMatch(statement.Text, @"\b(system|service|application|platform|production|deployment|project)\b",
+                RegexOptions.IgnoreCase));
+        if (scope is null) return [];
+
+        var findings = new List<Finding>();
+        foreach (var (name, controls) in terms)
+        {
+            if (controls.Any(control => allText.Contains(control, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            findings.Add(BuildDerivedFinding(scope, "HiddenRisk", "DarkMatterAgent",
+                $"{name} control is not documented in the supplied document.",
+                "Medium", 55, "Inferred"));
+        }
+        return findings;
+    }
+
+    public List<Finding> TimeMachineAgent(ParsedDocument document) =>
+        CreateDerivedFindings(document, "FutureRisk",
+            "Future operational failure may occur if the documented issue remains unresolved.",
+            "TimeMachineAgent", "High", 74,
+            ["missing", "not defined", "unresolved", "manual", "outage", "blocker", "under discussion"]);
+
+    public List<Finding> RecommendationAgent(ParsedDocument document) =>
+        CreateDerivedFindings(document, "Recommendation",
+            "Consider resolving this documented gap before approval or deployment.",
+            "SupervisorAgent", "Medium", 62,
+            ["missing", "ambiguous", "incomplete", "not defined", "unresolved"]);
+
+    public List<Finding> CriticalRiskAgent(ParsedDocument document) =>
+        document.Statements
+            .Where(statement => CriticalTerms.Any(term =>
+                statement.Text.Contains(term, StringComparison.OrdinalIgnoreCase)))
+            .Select(statement => BuildFinding(statement, "Risk", "RiskAgent",
+                "Critical-risk indicator found in source evidence.", "Critical", 95))
+            .ToList();
+
+    public List<Finding> HighPriorityAgent(ParsedDocument document)
+    {
+        var findings = new List<Finding>();
+        foreach (var statement in document.Statements)
+        {
+            var text = statement.Text;
+            var highTerm = HighTerms.FirstOrDefault(term =>
+                text.Contains(term, StringComparison.OrdinalIgnoreCase));
+            var hasExplicitHighPriority = TryGetExplicitLabel(text, out var label) &&
+                                          label.Priority == "High";
+            if (highTerm is null && !hasExplicitHighPriority) continue;
+
+            var findingType = highTerm switch
+            {
+                "missing dependency" => "Dependency",
+                "security finding" => "Security",
+                "compliance issue" => "Compliance",
+                _ => hasExplicitHighPriority ? label.Type : "ActionItem"
+            };
+            findings.Add(BuildFinding(statement, findingType, "PriorityAgent",
+                highTerm is null ? $"Explicit {findingType} priority label" : $"High-priority indicator: {highTerm}",
+                "High", 82));
+        }
+        return findings;
+    }
+
+    private List<Finding> CreateDerivedFindings(ParsedDocument document, string type,
+        string title, string agent, string priority, int score, string[] phrases)
+    {
+        return document.Statements
+            .Where(statement => phrases.Any(phrase =>
+                statement.Text.Contains(phrase, StringComparison.OrdinalIgnoreCase)))
+            .Select(statement => BuildDerivedFinding(statement, type, agent, title, priority, score,
+                score < 70 ? "Inferred" : "Strong Evidence"))
+            .ToList();
+    }
+
+    private Finding BuildDerivedFinding(Statement statement, string type, string agent,
+        string title, string priority, int score, string confidenceBand)
+    {
+        var finding = BuildFinding(statement, type, agent, title, priority, score);
+        return new Finding
+        {
+            Id = finding.Id,
+            FindingType = finding.FindingType,
+            AgentName = finding.AgentName,
+            Title = finding.Title,
+            Description = finding.Description,
+            Priority = finding.Priority,
+            Score = finding.Score,
+            Confidence = confidenceBand == "Inferred" ? 60 : finding.Confidence,
+            ConfidenceBand = confidenceBand,
+            Evidence = finding.Evidence
+        };
+    }
 
     public List<Finding> HumanReviewAgent(ParsedDocument document)
     {
@@ -178,7 +288,7 @@ public sealed class AgentServices
             var text = statement.Text;
             var hasExplicitLabel = TryGetExplicitLabel(text, out var explicitLabel) &&
                                    explicitLabel.Type.Equals(findingType, StringComparison.OrdinalIgnoreCase);
-            var criticalTerm = CriticalTerms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
+            var criticalTerm = criticalTerms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
             var highTerm = HighTerms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
             var semanticTerm = additionalTerms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
 
@@ -207,7 +317,8 @@ public sealed class AgentServices
 
     private static bool TryGetExplicitLabel(string text, out (string Type, string Priority, int Score) label)
     {
-        var match = Regex.Match(text.Trim(), @"^([A-Za-z]+(?:\s[A-Za-z]+)?):", RegexOptions.IgnoreCase);
+        var candidate = Regex.Replace(text.Trim(), @"^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?", "");
+        var match = Regex.Match(candidate, @"^([A-Za-z]+(?:\s[A-Za-z]+)?):", RegexOptions.IgnoreCase);
         if (match.Success)
         {
             var key = match.Groups[1].Value.Trim();

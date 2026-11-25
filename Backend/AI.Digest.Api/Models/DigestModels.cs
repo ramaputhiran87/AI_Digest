@@ -12,7 +12,7 @@ public sealed class ParsedDocument
     public Dictionary<string, string> Metadata { get; init; } = [];
 }
 
-public sealed record DocumentSection(int Index, string Heading, int StartLine, int EndLine, string Text);
+public sealed record DocumentSection(int Index, string Heading, int StartLine, int EndLine, string Text, int Level = 1);
 public sealed record Statement(
     Guid Id,
     string Text,
@@ -83,6 +83,11 @@ public sealed class DigestResult
     public List<ContradictionFindingDetail> ContradictionDetails { get; init; } = [];
     public List<Finding> HumanReviewRequired { get; init; } = [];
     public List<Finding> Recommendations { get; init; } = [];
+    public List<Finding> KeyFindings { get; init; } = [];
+    public List<Finding> HiddenRisks { get; init; } = [];
+    public List<Finding> FutureRisks { get; init; } = [];
+    public List<Finding> StrategicOpportunities { get; init; } = [];
+    public List<Finding> ActionItems { get; init; } = [];
     public int ConfidenceScore { get; init; }
     public string ConfidenceBand { get; init; } = "";
     public List<EvidenceRef> Evidence { get; init; } = [];

@@ -19,9 +19,13 @@
       <label>Use-case text <span>Optional</span></label>
       <textarea rows="4" [ngModel]="useCase()" (ngModelChange)="useCase.set($event)" placeholder="Paste or describe the use case for this review..."></textarea>
     </div>
-    <button class="analyse" [disabled]="loading() || (!selectedFile() && !useCase().trim())" (click)="analyse()">
-      {{ loading() ? 'Analysing...' : 'Start analysis' }}
-    </button>
+    <div class="analyse-actions">
+      <button class="analyse" [disabled]="loading() || (!selectedFile() && !useCase().trim())" (click)="analyse()">
+        {{ loading() ? 'Analysing...' : 'Start analysis' }}
+      </button>
+      <button class="secondary-action" [disabled]="!result()" (click)="exportJson()">Export JSON</button>
+      <button class="secondary-action" [disabled]="!result()" (click)="downloadCompressedMarkdown()">Download Compressed MD</button>
+    </div>
   </section>
 
   @if (apiError()) {
@@ -36,6 +40,9 @@
       <article><small>Dependencies</small><strong>{{ data.dependencies.length }}</strong></article>
       <article><small>Contradictions</small><strong>{{ data.contradictions.length }}</strong></article>
       <article><small>Confidence</small><strong>{{ data.confidenceScore }}%</strong></article>
+      <article><small>Dream Opportunities</small><strong>{{ data.strategicOpportunities.length }}</strong></article>
+      <article><small>Dark Matter Findings</small><strong>{{ data.hiddenRisks.length }}</strong></article>
+      <article><small>Future Failure Predictions</small><strong>{{ data.futureRisks.length }}</strong></article>
     </section>
 
     <section class="summary">
@@ -45,8 +52,7 @@
         <span>{{ data.executiveSummary }}</span>
       </div>
       <div class="export-actions">
-        <button (click)="downloadCompressedMarkdown()">Download Compressed MD</button>
-        <button (click)="exportJson()">Export JSON</button>
+        <button (click)="exportMarkdown()">Export Markdown</button>
       </div>
     </section>
 
