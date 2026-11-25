@@ -6,8 +6,15 @@ using Microsoft.Identity.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddMicrosoftIdentityWebApiAuthentication(
-    builder.Configuration.GetSection("AzureAd"));
+var entraConfigured =
+    !string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:TenantId"]) &&
+    !string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:ClientId"]);
+if (entraConfigured)
+{
+    builder.Services.AddMicrosoftIdentityWebApiAuthentication(
+        builder.Configuration.GetSection("AzureAd"));
+}
+builder.Services.AddAuthorization();
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(builder.Configuration["Cors:Origins"]?.Split(',') ?? ["http://localhost:4200"])
           .AllowAnyHeader().AllowAnyMethod()));
@@ -21,7 +28,10 @@ builder.Services.AddOpenApi();
 
 var app = builder.Build();
 app.UseCors();
-app.UseAuthentication();
+if (entraConfigured)
+{
+    app.UseAuthentication();
+}
 app.UseAuthorization();
 app.MapOpenApi();
 
