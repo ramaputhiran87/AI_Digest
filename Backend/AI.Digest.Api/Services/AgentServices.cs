@@ -5,123 +5,237 @@ namespace AI.Digest.Api.Services;
 
 public sealed class AgentServices
 {
-    public List<Finding> RequirementAgent(ParsedDocument document)
-    {
-        var findings = new List<Finding>();
-        foreach (var statement in document.Statements)
-        {
-            if (Regex.IsMatch(statement.Text, @"\b(must|shall|required|approval|acceptance criteria)\b",
-                RegexOptions.IgnoreCase))
-            {
-                findings.Add(Build(statement, "Requirement", "RequirementAgent",
-                    "Requirement or approval term detected",
-                    statement.Text.Contains("approval", StringComparison.OrdinalIgnoreCase) ? "High" : "Medium",
-                    statement.Text.Contains("approval", StringComparison.OrdinalIgnoreCase) ? 78 : 58));
-            }
-        }
-        return findings;
-    }
+    private static readonly string[] CriticalTerms =
+    [
+        "password", "credentials", "secret", "apikey", "api key", "token", "pii", "ssn",
+        "gdpr", "pci", "hipaa", "data breach", "vulnerability", "unencrypted", "sha1",
+        "outage", "ransomware", "critical", "security approval missing"
+    ];
 
-    public List<Finding> SecurityAgent(ParsedDocument document)
-    {
-        var terms = new[] { "authentication", "authorization", "encryption", "pii", "secret", "owasp", "token", "data loss" };
-        return Scan(document, "Security", "SecurityAgent", terms, ("pii|data loss|secret|breach", "Critical", 95),
-            ("authentication|authorization|encryption|owasp|token", "High", 82));
-    }
+    private static readonly string[] HighTerms =
+    [
+        "pending approval", "blocker", "mandatory action", "security finding",
+        "compliance issue", "missing dependency", "deployment blocker"
+    ];
+
+    private static readonly string[] HumanReviewTerms =
+    [
+        "requires review", "under discussion", "approval required", "unresolved",
+        "ownership unclear", "not finalized", "undecided", "requires business decision",
+        "pending executive approval"
+    ];
+
+    private static readonly Dictionary<string, (string Type, string Priority, int Score)> ExplicitLabels =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Decision"] = ("Decision", "Medium", 60),
+            ["Approval"] = ("Approval", "High", 78),
+            ["Action"] = ("ActionItem", "Medium", 58),
+            ["Risk"] = ("Risk", "High", 82),
+            ["Dependency"] = ("Dependency", "Medium", 55),
+            ["Blocker"] = ("Blocker", "High", 88),
+            ["Security"] = ("Security", "Critical", 95),
+            ["Compliance"] = ("Compliance", "Critical", 92),
+            ["Requirement"] = ("Requirement", "High", 78),
+            ["Recommendation"] = ("Recommendation", "Low", 30),
+            ["ProductionImpact"] = ("ProductionImpact", "Critical", 94),
+            ["Human Review"] = ("HumanReview", "High", 72)
+        };
+
+    public List<Finding> RequirementAgent(ParsedDocument document) =>
+        ScanExplicit(document, "RequirementAgent",
+            new[] { "Requirement", "Decision", "Approval", "Action", "Dependency", "Blocker" },
+            new[] { "must", "shall", "required", "acceptance criteria", "ambiguous", "missing requirement", "incomplete" });
+
+    public List<Finding> SecurityAgent(ParsedDocument document) =>
+        ScanPatterns(document, "Security", "SecurityAgent", CriticalTerms,
+            new[] { "authentication", "authorization", "encryption", "owasp", "attack", "secret", "password", "credentials" });
 
     public List<Finding> ComplianceAgent(ParsedDocument document) =>
-        Scan(document, "Compliance", "ComplianceAgent",
-            ["gdpr", "hipaa", "pci", "soc2", "governance", "regulatory"],
-            ("gdpr|hipaa|pci|regulatory", "Critical", 92),
-            ("soc2|governance", "High", 74));
+        ScanPatterns(document, "Compliance", "ComplianceAgent",
+            new[] { "gdpr", "hipaa", "pci", "soc2", "governance", "compliance", "regulatory" },
+            Array.Empty<string>());
 
     public List<Finding> BusinessImpactAgent(ParsedDocument document) =>
-        Scan(document, "ProductionImpact", "BusinessImpactAgent",
-            ["revenue", "customer", "sla", "outage", "production", "operational"],
-            ("outage|production outage", "Critical", 94),
-            ("revenue|customer|sla|production|operational", "High", 76));
+        ScanPatterns(document, "ProductionImpact", "BusinessImpactAgent",
+            new[] { "revenue", "customer", "sla", "outage", "production", "operational", "deployment" },
+            Array.Empty<string>());
 
     public List<Finding> HumanReviewAgent(ParsedDocument document)
     {
-        var findings = new List<Finding>();
+        var result = new List<Finding>();
         foreach (var statement in document.Statements)
         {
-            if (Regex.IsMatch(statement.Text, @"\b(owner|approver|due date|assumption|approval|decision)\b",
-                RegexOptions.IgnoreCase))
-                findings.Add(Build(statement, "HumanReview", "HumanReviewAgent",
-                    "Statement requires human ownership or decision confirmation", "High", 72));
+            var text = statement.Text;
+            var isHumanPhrase = HumanReviewTerms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
+            var isExplicit = TryGetExplicitLabel(text, out var label) && label.Type == "HumanReview";
+            if (!isHumanPhrase && !isExplicit) continue;
+
+            result.Add(BuildFinding(statement, "HumanReview", "HumanReviewAgent",
+                isExplicit ? "Explicit human review label" : "Human review phrase detected",
+                "High", 72));
         }
-        return findings;
+        return result;
     }
 
-    public List<ContradictionFinding> ContradictionAgent(ParsedDocument document)
+    public List<ContradictionFindingDetail> ContradictionAgent(ParsedDocument document)
     {
-        var contradictions = new List<ContradictionFinding>();
-        var pairs = document.Statements
-            .SelectMany((a, i) => document.Statements.Skip(i + 1).Select(b => (A: a, B: b)))
-            .Where(pair =>
-                (pair.A.Text.Contains("version", StringComparison.OrdinalIgnoreCase) &&
-                 pair.B.Text.Contains("version", StringComparison.OrdinalIgnoreCase)) ||
-                (pair.A.Text.Contains("before", StringComparison.OrdinalIgnoreCase) &&
-                 pair.B.Text.Contains("after", StringComparison.OrdinalIgnoreCase)))
-            .Take(20);
+        var contradictions = new List<ContradictionFindingDetail>();
+        var statements = document.Statements;
 
-        foreach (var pair in pairs)
+        foreach (var pair in statements.SelectMany((a, i) => statements.Skip(i + 1).Select(b => (A: a, B: b))))
         {
-            var finding = new Finding
+            var subjectAndValues = DetectContradiction(pair.A, pair.B);
+            if (subjectAndValues is null) continue;
+            var (subject, valueA, valueB) = subjectAndValues.Value;
+            contradictions.Add(new ContradictionFindingDetail(
+                subject, valueA, valueB, Evidence(pair.A), Evidence(pair.B), 90));
+        }
+
+        return contradictions
+            .DistinctBy(item => $"{item.Subject}:{item.ValueA}:{item.ValueB}")
+            .Take(50)
+            .ToList();
+    }
+
+    private static (string Subject, string ValueA, string ValueB)? DetectContradiction(Statement a, Statement b)
+    {
+        var textA = a.Text.Trim();
+        var textB = b.Text.Trim();
+
+        var dotNetA = Regex.Match(textA, @"\.NET\s*(\d+(?:\.\d+)*)", RegexOptions.IgnoreCase);
+        var dotNetB = Regex.Match(textB, @"\.NET\s*(\d+(?:\.\d+)*)", RegexOptions.IgnoreCase);
+        if (dotNetA.Success && dotNetB.Success &&
+            !dotNetA.Groups[1].Value.Equals(dotNetB.Groups[1].Value, StringComparison.OrdinalIgnoreCase))
+            return ("Runtime version", dotNetA.Value, dotNetB.Value);
+
+        foreach (var subject in new[] { "Deployment Date", "Claims", "Approval", "Status", "Version" })
+        {
+            var dateA = Regex.Match(textA, $@"{subject}\s*[=:]\s*(\d{{4}}-\d{{2}}-\d{{2}})", RegexOptions.IgnoreCase);
+            var dateB = Regex.Match(textB, $@"{subject}\s*[=:]\s*(\d{{4}}-\d{{2}}-\d{{2}})", RegexOptions.IgnoreCase);
+            if (dateA.Success && dateB.Success && dateA.Groups[1].Value != dateB.Groups[1].Value)
+                return (subject, dateA.Groups[1].Value, dateB.Groups[1].Value);
+        }
+
+        var claimsOpposing = (textA.Contains("claims require review", StringComparison.OrdinalIgnoreCase) &&
+                              textB.Contains("claims auto approved", StringComparison.OrdinalIgnoreCase)) ||
+                             (textB.Contains("claims require review", StringComparison.OrdinalIgnoreCase) &&
+                              textA.Contains("claims auto approved", StringComparison.OrdinalIgnoreCase));
+        if (claimsOpposing)
+        {
+            var valueA = textA.Contains("claims require review", StringComparison.OrdinalIgnoreCase)
+                ? "Claims require review" : "Claims auto approved";
+            var valueB = textB.Contains("claims require review", StringComparison.OrdinalIgnoreCase)
+                ? "Claims require review" : "Claims auto approved";
+            return ("Claims approval", valueA, valueB);
+        }
+
+        var separatorA = textA.IndexOf('=');
+        var separatorB = textB.IndexOf('=');
+        if (separatorA > 0 && separatorB > 0)
+        {
+            var subjectA = textA[..separatorA].Trim();
+            var subjectB = textB[..separatorB].Trim();
+            var valueA = textA[(separatorA + 1)..].Trim();
+            var valueB = textB[(separatorB + 1)..].Trim();
+            if (subjectA.Equals(subjectB, StringComparison.OrdinalIgnoreCase) &&
+                !valueA.Equals(valueB, StringComparison.OrdinalIgnoreCase))
+                return (subjectA, valueA, valueB);
+        }
+
+        return null;
+    }
+
+    private List<Finding> ScanExplicit(ParsedDocument document, string agent,
+        string[] allowedLabels, string[] semanticTerms)
+    {
+        var result = new List<Finding>();
+        foreach (var statement in document.Statements)
+        {
+            if (TryGetExplicitLabel(statement.Text, out var label) &&
+                allowedLabels.Contains(label.Type, StringComparer.OrdinalIgnoreCase))
             {
-                FindingType = "Contradiction",
-                AgentName = "ContradictionAgent",
-                Title = "Potential statement contradiction",
-                Description = "Two statements contain conflicting version or sequencing language.",
-                Priority = "High",
-                Score = 82,
-                Confidence = 68,
-                ConfidenceBand = "Inferred"
-            };
-            contradictions.Add(new ContradictionFinding(finding,
-                Evidence(pair.A), Evidence(pair.B)));
+                result.Add(BuildFinding(statement, label.Type, agent,
+                    $"Explicit {label.Type} label", label.Priority, label.Score));
+                continue;
+            }
+
+            if (semanticTerms.Any(term => statement.Text.Contains(term, StringComparison.OrdinalIgnoreCase)))
+            {
+                result.Add(BuildFinding(statement, "Requirement", agent,
+                    "Requirement semantics detected", "High", 76));
+            }
         }
-        return contradictions;
+        return result;
     }
 
-    private List<Finding> Scan(ParsedDocument document, string findingType, string agent,
-        IEnumerable<string> terms, (string Pattern, string Priority, int Score) critical,
-        (string Pattern, string Priority, int Score) high)
+    private List<Finding> ScanPatterns(ParsedDocument document, string findingType, string agent,
+        string[] criticalTerms, string[] additionalTerms)
     {
-        var findings = new List<Finding>();
+        var result = new List<Finding>();
         foreach (var statement in document.Statements)
         {
-            var text = statement.Text.ToLowerInvariant();
-            if (!terms.Any(term => text.Contains(term))) continue;
-            var (pattern, priority, score) = Regex.IsMatch(text, critical.Pattern, RegexOptions.IgnoreCase)
-                ? critical
-                : high;
-            findings.Add(Build(statement, findingType, agent,
-                $"Deterministic keyword match for {findingType.ToLowerInvariant()} terms", priority, score));
+            var text = statement.Text;
+            var hasExplicitLabel = TryGetExplicitLabel(text, out var explicitLabel) &&
+                                   explicitLabel.Type.Equals(findingType, StringComparison.OrdinalIgnoreCase);
+            var criticalTerm = CriticalTerms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
+            var highTerm = HighTerms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
+            var semanticTerm = additionalTerms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
+
+            if (!hasExplicitLabel && !criticalTerm && !highTerm && !semanticTerm) continue;
+
+            if (criticalTerm || (hasExplicitLabel && explicitLabel.Priority == "Critical"))
+            {
+                result.Add(BuildFinding(statement, findingType, agent,
+                    "Explicit or pattern-matched critical risk", "Critical", 95));
+            }
+            else if (highTerm)
+            {
+                result.Add(BuildFinding(statement, findingType, agent,
+                    "High-priority pattern detected", "High", 82));
+            }
+            else
+            {
+                result.Add(BuildFinding(statement, findingType, agent,
+                    hasExplicitLabel ? $"Explicit {findingType} label" : $"{findingType} pattern detected",
+                    hasExplicitLabel ? explicitLabel.Priority : "Medium",
+                    hasExplicitLabel ? explicitLabel.Score : 68));
+            }
         }
-        return findings;
+        return result;
     }
 
-    public Finding Build(Statement statement, string type, string agent, string description,
+    private static bool TryGetExplicitLabel(string text, out (string Type, string Priority, int Score) label)
+    {
+        var match = Regex.Match(text.Trim(), @"^([A-Za-z]+(?:\s[A-Za-z]+)?):", RegexOptions.IgnoreCase);
+        if (match.Success)
+        {
+            var key = match.Groups[1].Value.Trim();
+            if (ExplicitLabels.TryGetValue(key, out label)) return true;
+        }
+        label = default;
+        return false;
+    }
+
+    public Finding BuildFinding(Statement statement, string type, string agent, string title,
         string priority, int score)
     {
         var confidence = 92;
         var band = "Explicit Evidence";
         if (score < 70) { confidence = 68; band = "Inferred"; }
         else if (score < 85) { confidence = 82; band = "Strong Evidence"; }
-        var evidence = Evidence(statement);
+
         return new Finding
         {
             FindingType = type,
             AgentName = agent,
-            Title = description,
+            Title = title,
             Description = statement.Text,
             Priority = priority,
             Score = score,
             Confidence = confidence,
             ConfidenceBand = band,
-            Evidence = evidence
+            Evidence = Evidence(statement)
         };
     }
 

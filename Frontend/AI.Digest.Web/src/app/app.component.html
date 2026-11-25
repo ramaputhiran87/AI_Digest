@@ -40,8 +40,21 @@
         <h2>{{ data.documentTitle }}</h2>
         <span>{{ data.executiveSummary }}</span>
       </div>
-      <button (click)="exportJson()">Export JSON</button>
+      <div class="export-actions">
+        <button (click)="downloadCompressedMarkdown()">Download Compressed MD</button>
+        <button (click)="exportJson()">Export JSON</button>
+      </div>
     </section>
+
+    @if (data.compressedDocument.statistics.originalLines > 0) {
+      <section class="compression-stats">
+        <article><small>Original Lines</small><strong>{{ data.compressedDocument.statistics.originalLines }}</strong></article>
+        <article><small>Compressed Lines</small><strong>{{ data.compressedDocument.statistics.compressedLines }}</strong></article>
+        <article><small>Removed Lines</small><strong>{{ data.compressedDocument.statistics.removedLines }}</strong></article>
+        <article><small>Compression Ratio</small><strong>{{ data.compressedDocument.statistics.compressionPercent }}%</strong></article>
+        <article><small>Noise Removed</small><strong>{{ data.compressedDocument.statistics.noiseRemovedPercent }}%</strong></article>
+      </section>
+    }
 
     <section class="findings">
       <div class="section-heading"><div><p>KEY FINDINGS</p><h2>Evidence-backed review</h2></div><span>{{ findings().length }} findings</span></div>

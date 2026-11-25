@@ -37,6 +37,25 @@ interface DigestResult {
   confidenceScore: number;
   confidenceBand: string;
   evidence: Evidence[];
+  contradictionDetails: {
+    subject: string;
+    valueA: string;
+    valueB: string;
+    evidenceA: Evidence;
+    evidenceB: Evidence;
+    confidence: number;
+  }[];
+  compressedDocument: {
+    fileName: string;
+    markdown: string;
+    statistics: {
+      originalLines: number;
+      compressedLines: number;
+      removedLines: number;
+      compressionPercent: number;
+      noiseRemovedPercent: number;
+    };
+  };
 }
 
 @Component({
@@ -89,14 +108,14 @@ export class AppComponent {
       const form = new FormData();
       form.append('file', this.selectedFile()!);
       form.append('useCase', this.useCase());
-      this.http.post<DigestResult>('http://localhost:5050/api/documents/analyse', form)
+      this.http.post<DigestResult>('http://127.0.0.1:5050/api/documents/analyse', form)
         .subscribe({
           next: value => this.result.set(value),
           error: () => this.result.set(this.demoResult()),
           complete: () => this.loading.set(false)
         });
     } else {
-      this.http.post<DigestResult>('http://localhost:5050/api/documents/analyse-text', {
+      this.http.post<DigestResult>('http://127.0.0.1:5050/api/documents/analyse-text', {
         text: this.useCase(),
         title: 'Use-case.txt',
         useCase: this.useCase()
@@ -117,6 +136,16 @@ export class AppComponent {
   exportJson() {
     const data = JSON.stringify(this.result() ?? this.demoResult(), null, 2);
     this.download(data, 'application/json', 'digest.json');
+  }
+
+  downloadCompressedMarkdown() {
+    const data = this.result();
+    if (!data) return;
+    this.download(
+      data.compressedDocument.markdown,
+      'text/markdown',
+      data.compressedDocument.fileName
+    );
   }
 
   private download(content: string, type: string, name: string) {
@@ -142,6 +171,19 @@ export class AppComponent {
       confidenceScore: 45,
       confidenceBand: 'Weak Evidence',
       evidence: []
+      ,
+      contradictionDetails: [],
+      compressedDocument: {
+        fileName: 'Use-case_Compressed.md',
+        markdown: '# Compressed Review',
+        statistics: {
+          originalLines: 0,
+          compressedLines: 1,
+          removedLines: 0,
+          compressionPercent: 0,
+          noiseRemovedPercent: 0
+        }
+      }
     };
   }
 }

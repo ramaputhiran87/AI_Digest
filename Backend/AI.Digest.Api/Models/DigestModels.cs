@@ -47,6 +47,30 @@ public sealed record ContradictionFinding(
     EvidenceRef EvidenceA,
     EvidenceRef EvidenceB);
 
+public sealed record ContradictionFindingDetail(
+    string Subject,
+    string ValueA,
+    string ValueB,
+    EvidenceRef EvidenceA,
+    EvidenceRef EvidenceB,
+    int Confidence);
+
+public sealed class CompressionStatistics
+{
+    public int OriginalLines { get; init; }
+    public int CompressedLines { get; init; }
+    public int RemovedLines { get; init; }
+    public int CompressionPercent { get; init; }
+    public int NoiseRemovedPercent { get; init; }
+}
+
+public sealed class CompressedDocument
+{
+    public string FileName { get; init; } = "";
+    public string Markdown { get; init; } = "";
+    public CompressionStatistics Statistics { get; init; } = new();
+}
+
 public sealed class DigestResult
 {
     public string DocumentTitle { get; init; } = "";
@@ -56,9 +80,11 @@ public sealed class DigestResult
     public List<Finding> CriticalRisks { get; init; } = [];
     public List<Finding> Dependencies { get; init; } = [];
     public List<ContradictionFinding> Contradictions { get; init; } = [];
+    public List<ContradictionFindingDetail> ContradictionDetails { get; init; } = [];
     public List<Finding> HumanReviewRequired { get; init; } = [];
     public List<Finding> Recommendations { get; init; } = [];
     public int ConfidenceScore { get; init; }
     public string ConfidenceBand { get; init; } = "";
     public List<EvidenceRef> Evidence { get; init; } = [];
+    public CompressedDocument CompressedDocument { get; init; } = new();
 }
