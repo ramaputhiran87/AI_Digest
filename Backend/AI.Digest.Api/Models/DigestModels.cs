@@ -1,6 +1,10 @@
 namespace AI.Digest.Api.Models;
 
-public record AnalyseTextRequest(string Text, string? Title, string? UseCase);
+public record AnalyseTextRequest(
+    string Text,
+    string? Title,
+    string? UseCase,
+    string? AnalysisMode = null);
 
 public sealed class ParsedDocument
 {
@@ -8,11 +12,13 @@ public sealed class ParsedDocument
     public string Title { get; init; } = "";
     public string SourceType { get; init; } = "";
     public List<DocumentSection> Sections { get; init; } = [];
+    public List<DocumentSourceLine> SourceLines { get; init; } = [];
     public List<Statement> Statements { get; init; } = [];
     public Dictionary<string, string> Metadata { get; init; } = [];
 }
 
 public sealed record DocumentSection(int Index, string Heading, int StartLine, int EndLine, string Text, int Level = 1);
+public sealed record DocumentSourceLine(int LineNumber, string Section, string Content, string Evidence);
 public sealed record Statement(
     Guid Id,
     string Text,
@@ -75,6 +81,9 @@ public sealed class DigestResult
 {
     public string DocumentTitle { get; init; } = "";
     public string DocumentType { get; init; } = "";
+    public string AnalysisProvider { get; init; } = "";
+    public AiModelInfo? ModelInfo { get; init; }
+    public AiAnalysisReport? AiReport { get; init; }
     public string ExecutiveSummary { get; init; } = "";
     public List<Finding> HighPriorityItems { get; init; } = [];
     public List<Finding> CriticalRisks { get; init; } = [];
@@ -93,3 +102,72 @@ public sealed class DigestResult
     public List<EvidenceRef> Evidence { get; init; } = [];
     public CompressedDocument CompressedDocument { get; init; } = new();
 }
+
+public sealed class AiModelInfo
+{
+    public string Provider { get; init; } = "";
+    public string ModelName { get; init; } = "";
+    public string? ModelVersion { get; init; }
+    public DateTimeOffset AnalysisStartedAt { get; init; }
+    public DateTimeOffset AnalysisCompletedAt { get; init; }
+    public int InferenceCalls { get; init; }
+    public int? InputTokens { get; init; }
+    public int? OutputTokens { get; init; }
+    public string Status { get; init; } = "Completed";
+    public string FindingOrigin { get; init; } = "AI generated; source evidence programmatically checked";
+}
+
+public sealed class AiAnalysisReport
+{
+    public string ExecutiveSummary { get; init; } = "";
+    public DocumentUnderstanding DocumentUnderstanding { get; init; } = new();
+    public string SecurityAssessment { get; init; } = "";
+    public string ArchitectureAssessment { get; init; } = "";
+    public string ComplianceAssessment { get; init; } = "";
+    public string BusinessImpact { get; init; } = "";
+    public List<AiFinding> Findings { get; init; } = [];
+    public List<string> PriorityActionPlan { get; init; } = [];
+    public string OverallAssessment { get; init; } = "";
+}
+
+public sealed class DocumentUnderstanding
+{
+    public string Purpose { get; init; } = "";
+    public string Domain { get; init; } = "";
+    public List<string> KeyFacts { get; init; } = [];
+    public List<string> Components { get; init; } = [];
+    public List<string> Relationships { get; init; } = [];
+    public string Summary { get; init; } = "";
+}
+
+public sealed class AiFinding
+{
+    public string Title { get; init; } = "";
+    public string Category { get; init; } = "";
+    public string Severity { get; init; } = "INFORMATIONAL";
+    public string Status { get; init; } = "Potential";
+    public string Observation { get; init; } = "";
+    public string Reasoning { get; init; } = "";
+    public string Likelihood { get; init; } = "";
+    public string Impact { get; init; } = "";
+    public string Exploitability { get; init; } = "";
+    public string BusinessImpact { get; init; } = "";
+    public string TechnicalImpact { get; init; } = "";
+    public string Recommendation { get; init; } = "";
+    public List<AiEvidence> Evidence { get; init; } = [];
+    public double Confidence { get; init; }
+    public string SeverityReason { get; init; } = "";
+}
+
+public sealed class AiEvidence
+{
+    public string Quotation { get; init; } = "";
+    public int StartLine { get; init; }
+    public int EndLine { get; init; }
+}
+
+public sealed record ModelInferenceResult(
+    string Content,
+    string? ModelVersion,
+    int? InputTokens,
+    int? OutputTokens);

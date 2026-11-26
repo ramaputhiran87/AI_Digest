@@ -1,101 +1,395 @@
 <header class="topbar">
-  <div class="brand"><span class="brand-mark">AI</span><div><strong>AI Document Digest</strong><small>Enterprise Review</small></div></div>
-  <nav><button [class.active]="activeTab() === 'Dashboard'" (click)="setTab('Dashboard')">Dashboard</button><button [class.active]="activeTab() === 'History'" (click)="setTab('History')">History</button></nav>
-  <div class="profile"><span>NP</span><div><strong>Nina Patel</strong><small>Reviewer</small></div></div>
+  <a class="brand" href="#" (click)="$event.preventDefault(); setTab('Dashboard')" aria-label="AI Document Digest dashboard">
+    <span class="brand-mark"><svg lucideSparkles></svg></span>
+    <span class="brand-copy">
+      <strong>AI Document Digest</strong>
+      <small>Enterprise Intelligence Platform</small>
+    </span>
+  </a>
+
+  <nav class="primary-nav" aria-label="Main navigation">
+    @for (item of navItems; track item) {
+      <button class="nav-link" [class.active]="activeTab() === item" (click)="setTab(item)">
+        @switch (item) {
+          @case ('Dashboard') { <svg lucideLayoutDashboard></svg> }
+          @case ('Document Analysis') { <svg lucideFileSearch></svg> }
+          @case ('Analytics') { <svg lucideChartNoAxesCombined></svg> }
+          @case ('History') { <svg lucideClock></svg> }
+        }
+        <span>{{ item }}</span>
+      </button>
+    }
+  </nav>
+
+  <div class="top-actions">
+    <div class="popover-anchor">
+      <button class="icon-button notification-button" aria-label="Notifications"
+        [attr.aria-expanded]="notificationsOpen()" (click)="toggleNotifications()">
+        <svg lucideBell></svg>
+        @if (notificationCount()) { <span class="notification-dot"></span> }
+      </button>
+      @if (notificationsOpen()) {
+        <section class="popover notification-popover">
+          <div class="popover-heading"><strong>Notifications</strong><button class="icon-button small-icon" aria-label="Close notifications" (click)="toggleNotifications()"><svg lucideX></svg></button></div>
+          @if (failedCount()) {
+            <p class="notification-message"><svg lucideCircleAlert></svg>{{ failedCount() }} recent analysis attempt{{ failedCount() === 1 ? '' : 's' }} failed. Review them in History.</p>
+            <button class="text-action" (click)="setTab('History')">Open history</button>
+          } @else {
+            <p class="quiet-message">You’re all caught up. There are no failed analyses.</p>
+          }
+        </section>
+      }
+    </div>
+    <div class="popover-anchor">
+      <button class="avatar-button" aria-label="Open workspace settings"
+        [attr.aria-expanded]="settingsOpen()" (click)="toggleSettings()">AI</button>
+      @if (settingsOpen()) {
+        <section class="popover settings-popover">
+          <div class="popover-heading"><strong>Workspace settings</strong><button class="icon-button small-icon" aria-label="Close settings" (click)="toggleSettings()"><svg lucideX></svg></button></div>
+          <p>Analysis history is stored in this browser on this device.</p>
+          <p>Documents are sent to the configured AI provider. Check your provider terms before uploading sensitive material.</p>
+          <button class="text-action" (click)="setTab('Analytics')">View analytics</button>
+        </section>
+      }
+    </div>
+    <button class="icon-button settings-button" aria-label="Workspace settings" (click)="toggleSettings()"><svg lucideSettings></svg></button>
+  </div>
 </header>
 
-<main>
-  <section class="heading">
-    <div><p>DOCUMENT REVIEW</p><h1>Executive Review</h1><span>Evidence-based document analysis</span></div>
-  </section>
-
-  <section class="ingestion">
-    <label class="dropzone">
-      <input type="file" accept=".md,.txt,.html,.json,.xml" (change)="selectFile($event)">
-      <strong>{{ fileName() || 'Upload a document' }}</strong>
-      <small>Markdown, TXT, HTML, JSON or XML</small>
-    </label>
-    <div class="usecase">
-      <label>Use-case text <span>Optional</span></label>
-      <textarea rows="4" [ngModel]="useCase()" (ngModelChange)="useCase.set($event)" placeholder="Paste or describe the use case for this review..."></textarea>
-    </div>
-    <div class="analyse-actions">
-      <button class="analyse" [disabled]="loading() || (!selectedFile() && !useCase().trim())" (click)="analyse()">
-        {{ loading() ? 'Analysing...' : 'Start analysis' }}
-      </button>
-      <button class="secondary-action" [disabled]="!result()" (click)="exportJson()">Export JSON</button>
-      <button class="secondary-action" [disabled]="!result()" (click)="downloadCompressedMarkdown()">Download Compressed MD</button>
-    </div>
-  </section>
-
+<main class="app-main">
   @if (apiError()) {
-    <section class="api-error">{{ apiError() }}</section>
+    <div class="api-error" role="status">
+      <svg lucideCircleAlert></svg>
+      <span>{{ apiError() }}</span>
+      <button class="icon-button small-icon" aria-label="Dismiss message" (click)="apiError.set('')"><svg lucideX></svg></button>
+    </div>
   }
 
-  @if (result(); as data) {
-    <section class="cards">
-      <article><small>Critical Risks</small><strong>{{ data.criticalRisks.length }}</strong></article>
-      <article><small>High Priority</small><strong>{{ data.highPriorityItems.length }}</strong></article>
-      <article><small>Human Review</small><strong>{{ data.humanReviewRequired.length }}</strong></article>
-      <article><small>Dependencies</small><strong>{{ data.dependencies.length }}</strong></article>
-      <article><small>Contradictions</small><strong>{{ data.contradictions.length }}</strong></article>
-      <article><small>Confidence</small><strong>{{ data.confidenceScore }}%</strong></article>
-      <article><small>Dream Opportunities</small><strong>{{ data.strategicOpportunities.length }}</strong></article>
-      <article><small>Dark Matter Findings</small><strong>{{ data.hiddenRisks.length }}</strong></article>
-      <article><small>Future Failure Predictions</small><strong>{{ data.futureRisks.length }}</strong></article>
-    </section>
-
-    <section class="summary">
+  @if (activeTab() === 'Dashboard') {
+    <section class="welcome-row">
       <div>
-        <p>EXECUTIVE SUMMARY</p>
-        <h2>{{ data.documentTitle }}</h2>
-        <span>{{ data.executiveSummary }}</span>
+        <div class="eyebrow"><span class="eyebrow-dot"></span> INTELLIGENCE OVERVIEW</div>
+        <h1>Welcome to AI Document Intelligence</h1>
+        <p>Analyze documents, identify risks and generate actionable insights.</p>
       </div>
-      <div class="export-actions">
-        <button (click)="exportMarkdown()">Export Markdown</button>
-      </div>
+      <button class="button button-primary" (click)="setTab('Document Analysis')">
+        <svg lucideUpload></svg> New analysis <svg class="button-arrow" lucideArrowUpRight></svg>
+      </button>
     </section>
 
-    @if (data.compressedDocument.statistics.originalLines > 0) {
-      <section class="compression-stats">
-        <article><small>Original Lines</small><strong>{{ data.compressedDocument.statistics.originalLines }}</strong></article>
-        <article><small>Compressed Lines</small><strong>{{ data.compressedDocument.statistics.compressedLines }}</strong></article>
-        <article><small>Removed Lines</small><strong>{{ data.compressedDocument.statistics.removedLines }}</strong></article>
-        <article><small>Compression Ratio</small><strong>{{ data.compressedDocument.statistics.compressionPercent }}%</strong></article>
-        <article><small>Noise Removed</small><strong>{{ data.compressedDocument.statistics.noiseRemovedPercent }}%</strong></article>
-      </section>
-    }
+    <section class="kpi-grid" aria-label="Analysis overview">
+      <article class="kpi-card">
+        <div class="kpi-top"><span class="kpi-icon icon-blue"><svg lucideFiles></svg></span><span class="kpi-change" [class.down]="totalChange() && !totalChange()!.positive"><svg lucideTrendingUp></svg>{{ totalChange()?.label ?? '—' }}</span></div>
+        <p>Total documents analyzed</p>
+        <div class="kpi-value">{{ history().length }}</div>
+        <small>Compared with previous 7 days</small>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-top"><span class="kpi-icon icon-green"><svg lucideCircleCheck></svg></span><span class="kpi-change" [class.down]="successChange() && !successChange()!.positive"><svg lucideTrendingUp></svg>{{ successChange()?.label ?? '—' }}</span></div>
+        <p>Successful analyses</p>
+        <div class="kpi-value">{{ successfulHistory().length }}</div>
+        <small>{{ failedCount() }} failed in saved history</small>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-top"><span class="kpi-icon icon-red"><svg lucideShieldCheck></svg></span><span class="kpi-change" [class.down]="riskChange() && !riskChange()!.positive"><svg lucideTrendingUp></svg>{{ riskChange()?.label ?? '—' }}</span></div>
+        <p>Critical risks identified</p>
+        <div class="kpi-value">{{ criticalRiskCount() }}</div>
+        <small>Across successful analyses in this browser</small>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-top"><span class="kpi-icon icon-yellow"><svg lucideActivity></svg></span><span class="kpi-change" [class.down]="scoreChange() && !scoreChange()!.positive"><svg lucideTrendingUp></svg>{{ scoreChange()?.label ?? '—' }}</span></div>
+        <p>Average analysis score</p>
+        <div class="kpi-value">{{ averageScore() === null ? '—' : averageScore() + '%' }}</div>
+        <small>Confidence across successful analyses</small>
+      </article>
+    </section>
 
-    <section class="findings">
-      <div class="section-heading"><div><p>KEY FINDINGS</p><h2>Evidence-backed review</h2></div><span>{{ findings().length }} findings</span></div>
-      @for (finding of findings(); track finding.id) {
-        <article class="finding" [class.critical]="finding.priority === 'Critical'">
-          <div class="finding-main">
-            <div><span class="priority" [class]="finding.priority.toLowerCase()">{{ finding.priority }}</span><span class="agent">{{ finding.agentName }}</span></div>
-            <h3>{{ finding.title }}</h3>
-            <p>{{ finding.description }}</p>
+    <section class="chart-grid overview-charts">
+      <article class="panel chart-panel">
+        <div class="panel-heading">
+          <div><h2>Document analysis trend</h2><p>Completed and failed analyses in your saved history</p></div>
+          <div class="segmented-control" aria-label="Trend range">
+            <button [class.selected]="trendPeriod() === 'daily'" (click)="selectTrendPeriod('daily')">7 days</button>
+            <button [class.selected]="trendPeriod() === 'weekly'" (click)="selectTrendPeriod('weekly')">8 weeks</button>
+            <button [class.selected]="trendPeriod() === 'monthly'" (click)="selectTrendPeriod('monthly')">6 months</button>
           </div>
-          @if (finding.evidence) {
-            <div class="evidence">
-              <small>Evidence · Lines {{ finding.evidence.sourceLineStart }}–{{ finding.evidence.sourceLineEnd }}</small>
-              <blockquote>{{ finding.evidence.sourceText }}</blockquote>
-              <button (click)="jumpToSource(finding.evidence)">Jump to source</button>
-            </div>
+        </div>
+        <div echarts [options]="trendOption()" class="chart chart-trend" role="img" aria-label="Line chart showing real analyses from local history"></div>
+      </article>
+      <article class="panel chart-panel risk-chart-panel">
+        <div class="panel-heading"><div><h2>Risk distribution</h2><p>Findings from successful saved analyses</p></div><svg lucideChartPie class="heading-icon"></svg></div>
+        <div echarts [options]="riskOption()" class="chart chart-donut" role="img" aria-label="Donut chart showing risk severity from local history"></div>
+        <div class="mini-legend">
+          <span><i class="legend-critical"></i>Critical <strong>{{ riskDistribution().Critical }}</strong></span>
+          <span><i class="legend-high"></i>High <strong>{{ riskDistribution().High }}</strong></span>
+          <span><i class="legend-medium"></i>Medium <strong>{{ riskDistribution().Medium }}</strong></span>
+          <span><i class="legend-low"></i>Low <strong>{{ riskDistribution().Low }}</strong></span>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel recent-panel">
+      <div class="panel-heading">
+        <div><h2>Recent analyses</h2><p>Your latest document activity</p></div>
+        <button class="text-action" (click)="setTab('History')">View all <svg lucideArrowUpRight></svg></button>
+      </div>
+      @if (recentHistory().length) {
+        <div class="recent-list">
+          @for (entry of recentHistory(); track entry.id) {
+            <button class="recent-row" (click)="viewHistoryEntry(entry)">
+              <span class="file-type-icon"><svg lucideFileText></svg></span>
+              <span class="recent-name"><strong>{{ entry.documentTitle }}</strong><small>{{ entry.documentType }} · {{ entry.analysedAt | date:'MMM d, y · h:mm a' }}</small></span>
+              <span class="status-badge" [class.success]="entry.status === 'Successful'" [class.failed]="entry.status === 'Failed'"><i></i>{{ entry.status }}</span>
+              <span class="recent-risk" [class]="riskLevel(entry).toLowerCase()">{{ riskLevel(entry) }} risk</span>
+              <svg lucideChevronRight class="row-chevron"></svg>
+            </button>
           }
-        </article>
+        </div>
+      } @else {
+        <div class="empty-state compact-empty"><span class="empty-icon"><svg lucideFiles></svg></span><strong>No analyses yet</strong><p>Your recent document reviews will appear here.</p><button class="button button-secondary" (click)="setTab('Document Analysis')">Start your first analysis</button></div>
       }
-      @if (!findings().length) {
-        <div class="empty">No evidence-backed findings were identified.</div>
+    </section>
+  }
+
+  @if (activeTab() === 'Document Analysis') {
+    <section class="page-heading">
+      <div><div class="eyebrow"><span class="eyebrow-dot"></span> DOCUMENT WORKSPACE</div><h1>Document analysis</h1><p>Upload a document to surface evidence-backed insights and risks.</p></div>
+      @if (result()) {
+        <div class="heading-actions"><button class="button button-secondary" (click)="exportJson()"><svg lucideDownload></svg> Export JSON</button><button class="button button-secondary" (click)="exportMarkdown()"><svg lucideFileText></svg> Export report</button><button class="button button-secondary" (click)="downloadCompressedMarkdown()"><svg lucideFileCheck2></svg> Compressed MD</button></div>
       }
     </section>
 
-    @if (data.contradictions.length) {
-      <section class="contradictions">
-        <p>CONTRADICTIONS</p>
-        @for (item of data.contradictions; track item.evidenceA.statementId) {
-          <div><strong>{{ item.finding.description }}</strong><blockquote>A: {{ item.evidenceA.sourceText }}</blockquote><blockquote>B: {{ item.evidenceB.sourceText }}</blockquote></div>
-        }
+    <section class="panel upload-panel">
+      <div class="panel-heading upload-heading"><div><h2>Start new document analysis</h2><p>Choose a supported file and add context for a more focused review.</p></div><span class="secure-note"><svg lucideSparkles></svg> Configured AI provider</span></div>
+      <div class="upload-grid">
+        <div class="dropzone" [class.is-dragging]="dragOver()" [class.has-file]="selectedFile()"
+          (dragover)="onDragOver($event)" (dragleave)="onDragLeave($event)" (drop)="onDrop($event)">
+          <input #fileInput type="file" accept=".md,.txt,.html,.htm,.json,.xml" (change)="selectFile($event)" aria-label="Select document to analyze">
+          @if (selectedFile(); as file) {
+            <span class="upload-symbol file-symbol"><svg lucideFileCheck2></svg></span>
+            <strong class="selected-file-name">{{ file.name }}</strong>
+            <span class="file-meta">{{ documentType(file.name) }} <i></i> {{ formatBytes(file.size) }}</span>
+            <button class="remove-file" aria-label="Remove selected file" (click)="removeFile()"><svg lucideX></svg></button>
+            <button class="browse-link" (click)="fileInput.click()">Choose a different file</button>
+          } @else {
+            <span class="upload-symbol"><svg lucideCloudUpload></svg></span>
+            <strong>Drop your document here</strong>
+            <span class="dropzone-copy">or browse files from your device</span>
+            <button type="button" class="button button-secondary browse-button" (click)="fileInput.click()">Browse files</button>
+            <span class="supported-formats">MD, TXT, HTML, JSON, XML <i></i> Up to 20 MB</span>
+          }
+        </div>
+        <div class="context-input">
+          <label for="use-case">Analysis context <span>Optional</span></label>
+          <p>Tell us what matters most for this review.</p>
+          <textarea id="use-case" [ngModel]="useCase()" (ngModelChange)="useCase.set($event)" placeholder="For example: Review this policy for data privacy risks, compliance gaps, and approval blockers." rows="7"></textarea>
+          <div class="context-footer"><span>{{ useCase().length }} characters</span><span>Context helps focus findings</span></div>
+        </div>
+      </div>
+      <div class="analysis-mode-row">
+        <label for="analysis-mode">Analysis mode</label>
+        <select id="analysis-mode" [ngModel]="analysisMode()" (ngModelChange)="analysisMode.set($event)">
+          <option value="Configured">AI provider configured by the API</option>
+          <option value="Deterministic">Rules-based fallback (explicitly selected)</option>
+        </select>
+        <span>{{ analysisMode() === 'Deterministic' ? 'This fallback is not LLM analysis.' : 'AI provider failures are reported; no silent fallback is performed.' }}</span>
+      </div>
+      @if (loading()) {
+        <div class="analysis-progress" role="status"><span class="progress-track"><i></i></span><span>Analyzing document and validating source evidence…</span></div>
+      }
+      <div class="upload-footer">
+        <span class="upload-privacy"><svg lucideShieldCheck></svg> Your document is processed by the configured analysis provider.</span>
+        <button class="button button-primary analyze-button" [disabled]="loading() || (!selectedFile() && !useCase().trim())" (click)="analyse()">
+          @if (loading()) { <span class="button-spinner"></span> Analyzing… } @else { <svg lucideSparkles></svg> Analyze document }
+        </button>
+      </div>
+    </section>
+
+    @if (result(); as data) {
+      <section class="result-header">
+        <div><div class="eyebrow"><span class="eyebrow-dot"></span> ANALYSIS COMPLETE</div><h2>{{ data.documentTitle }}</h2><p>{{ data.documentType }} <i></i> {{ data.analysisProvider || 'Deterministic rules' }}</p></div>
+        <div class="confidence-card"><span class="confidence-ring" [style.--score]="data.confidenceScore"><strong>{{ data.confidenceScore }}%</strong></span><span><b>Confidence score</b><small>{{ data.confidenceBand }}</small></span></div>
       </section>
+
+      @if (data.modelInfo; as modelInfo) {
+        <section class="panel model-info-panel">
+          <div class="model-info-title"><span class="section-icon icon-blue"><svg lucideSparkles></svg></span><div><h3>AI model transparency</h3><span>Actual provider inference · {{ modelInfo.status }}</span></div></div>
+          <div class="model-info-grid">
+            <div><small>Provider</small><strong>{{ modelInfo.provider }}</strong></div>
+            <div><small>Model</small><strong>{{ modelInfo.modelName }}</strong></div>
+            <div><small>Model version</small><strong>{{ modelInfo.modelVersion || 'Not reported by provider' }}</strong></div>
+            <div><small>Inference calls</small><strong>{{ modelInfo.inferenceCalls }}</strong></div>
+            <div><small>Input / output tokens</small><strong>{{ modelInfo.inputTokens ?? '—' }} / {{ modelInfo.outputTokens ?? '—' }}</strong></div>
+            <div><small>Started</small><strong>{{ modelInfo.analysisStartedAt | date:'MMM d, y · h:mm:ss a' }}</strong></div>
+            <div><small>Completed</small><strong>{{ modelInfo.analysisCompletedAt | date:'MMM d, y · h:mm:ss a' }}</strong></div>
+          </div>
+          <p class="verification-note"><svg lucideShieldCheck></svg> {{ modelInfo.findingOrigin }} This is a document-only assessment, not confirmation of a live vulnerability or human-verified finding.</p>
+        </section>
+      }
+
+      <section class="result-overview-grid">
+        <article class="panel executive-card"><div class="result-section-title"><span class="section-icon icon-blue"><svg lucideSparkles></svg></span><div><h3>{{ data.aiReport ? 'AI executive summary' : 'Executive summary' }}</h3><span>{{ data.aiReport ? 'Generated from consolidated analysis' : 'Rules-based fallback summary' }}</span></div></div><p>{{ data.aiReport?.executiveSummary || data.executiveSummary }}</p></article>
+        <article class="panel risk-assessment">
+          <div class="result-section-title"><span class="section-icon icon-red"><svg lucideShieldCheck></svg></span><div><h3>Risk assessment</h3><span>Severity breakdown</span></div></div>
+          <div class="risk-pills"><span class="risk-pill critical"><b>{{ data.criticalRisks.length }}</b> Critical</span><span class="risk-pill high"><b>{{ data.highPriorityItems.length }}</b> High priority</span><span class="risk-pill medium"><b>{{ data.hiddenRisks.length }}</b> Observations</span>@if (data.aiReport) { <span class="risk-pill informational"><b>{{ data.aiReport.findings.filter(f => f.severity === 'INFORMATIONAL').length }}</b> Informational</span> }</div>
+          <div class="risk-meter"><i [style.width.%]="findings().length ? (data.criticalRisks.length / findings().length) * 100 : 0"></i><i [style.width.%]="findings().length ? (data.highPriorityItems.length / findings().length) * 100 : 0"></i><i [style.width.%]="findings().length ? (data.hiddenRisks.length / findings().length) * 100 : 0"></i></div>
+        </article>
+      </section>
+
+      @if (data.aiReport; as report) {
+        <section class="ai-assessment-grid">
+          <article class="panel assessment-card"><div class="panel-heading"><div><h2>Document understanding</h2><p>{{ report.documentUnderstanding.domain || 'Domain not determined' }}</p></div><svg lucideFileSearch class="heading-icon"></svg></div><strong>Purpose</strong><p>{{ report.documentUnderstanding.purpose }}</p><small>{{ report.documentUnderstanding.summary }}</small></article>
+          <article class="panel assessment-card"><div class="panel-heading"><div><h2>Security insights</h2><p>AI contextual assessment</p></div><svg lucideShieldCheck class="heading-icon"></svg></div><p>{{ report.securityAssessment }}</p></article>
+          <article class="panel assessment-card"><div class="panel-heading"><div><h2>Architecture insights</h2><p>Reliability, scalability, maintainability</p></div><svg lucideChartNoAxesCombined class="heading-icon"></svg></div><p>{{ report.architectureAssessment }}</p></article>
+          <article class="panel assessment-card"><div class="panel-heading"><div><h2>Compliance insights</h2><p>Documented controls vs evidence gaps</p></div><svg lucideShieldCheck class="heading-icon"></svg></div><p>{{ report.complianceAssessment }}</p></article>
+          <article class="panel assessment-card"><div class="panel-heading"><div><h2>Business impact</h2><p>Operational and business context</p></div><svg lucideActivity class="heading-icon"></svg></div><p>{{ report.businessImpact }}</p></article>
+        </section>
+      }
+
+      <section class="panel findings-panel" id="findings">
+        <div class="panel-heading"><div><h2>{{ data.aiReport ? 'AI key findings &amp; evidence explorer' : 'Key findings &amp; evidence explorer' }}</h2><p>{{ data.aiReport ? data.aiReport.findings.length : findings().length }} findings · evidence references programmatically checked</p></div><span class="confidence-inline"><svg lucideShieldCheck></svg> Evidence validated</span></div>
+        @if (data.aiReport; as report) {
+          <div class="finding-filters">
+            <label>Severity<select [ngModel]="findingSeverity()" (ngModelChange)="setFindingSeverity($event)"><option value="All">All severities</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option><option value="MEDIUM">Medium</option><option value="LOW">Low</option><option value="INFORMATIONAL">Informational</option></select></label>
+            <label>Category<select [ngModel]="findingCategory()" (ngModelChange)="setFindingCategory($event)"><option value="All">All categories</option>@for (category of findingCategories(); track category) { <option [value]="category">{{ category }}</option> }</select></label>
+            <label class="confidence-filter">Minimum confidence <strong>{{ minimumConfidence() }}%</strong><input type="range" min="0" max="100" step="5" [value]="minimumConfidence()" (input)="setMinimumConfidence($any($event.target).value)"></label>
+          </div>
+          @if (visibleAiFindings().length) {
+            @for (finding of visibleAiFindings(); track finding.title + finding.evidence[0]?.startLine) {
+              <details class="finding-detail ai-finding-detail">
+                <summary>
+                  <span class="severity-icon" [class]="finding.severity.toLowerCase()"><svg lucideCircleAlert></svg></span>
+                  <span class="finding-summary"><span><span class="severity-badge" [class]="finding.severity.toLowerCase()">{{ finding.severity }}</span><span class="agent-name">{{ finding.category }} · {{ finding.status }}</span><span class="finding-confidence">{{ finding.confidence * 100 | number:'1.0-0' }}% confidence</span></span><strong>{{ finding.title }}</strong><small>{{ finding.observation }}</small></span>
+                  <svg lucideChevronDown class="finding-chevron"></svg>
+                </summary>
+                <div class="ai-finding-body">
+                  <div class="finding-explanation-grid"><div><b>Reasoning</b><p>{{ finding.reasoning }}</p></div><div><b>Severity rationale</b><p>{{ finding.severityReason }}</p></div><div><b>Likelihood</b><p>{{ finding.likelihood || 'Not assessed' }}</p></div><div><b>Potential impact</b><p>{{ finding.impact || 'Not assessed' }}</p></div><div><b>Exploitability</b><p>{{ finding.exploitability || 'Not applicable or not evidenced' }}</p></div><div><b>Business impact</b><p>{{ finding.businessImpact }}</p></div><div><b>Technical impact</b><p>{{ finding.technicalImpact }}</p></div></div>
+                  <div class="ai-recommendation"><b>Recommendation</b><p>{{ finding.recommendation }}</p></div>
+                  @for (evidence of finding.evidence; track evidence.startLine + evidence.quotation) {
+                    <div class="evidence-detail"><div><span class="evidence-label">SOURCE EVIDENCE · PROGRAMMATICALLY CHECKED</span><span class="line-reference"><svg lucideFileText></svg> Lines {{ evidence.startLine }}–{{ evidence.endLine }}</span></div><blockquote>{{ evidence.quotation }}</blockquote></div>
+                  }
+                </div>
+              </details>
+            }
+          } @else { <div class="empty-state compact-empty"><strong>No findings match these filters</strong><p>Change severity, category, or confidence to see other results.</p></div> }
+        } @else if (findings().length) {
+          <div class="finding-list">
+            @for (finding of findings(); track finding.id) {
+              <details class="finding-detail">
+                <summary>
+                  <span class="severity-icon" [class]="finding.priority.toLowerCase()"><svg lucideCircleAlert></svg></span>
+                  <span class="finding-summary"><span><span class="severity-badge" [class]="finding.priority.toLowerCase()">{{ finding.priority }}</span><span class="agent-name">{{ finding.agentName }}</span></span><strong>{{ finding.title }}</strong><small>{{ finding.description }}</small></span>
+                  <svg lucideChevronDown class="finding-chevron"></svg>
+                </summary>
+                @if (finding.evidence) {
+                  <div class="evidence-detail"><div><span class="evidence-label">SOURCE EVIDENCE</span><span class="line-reference"><svg lucideFileText></svg> Lines {{ finding.evidence.sourceLineStart }}–{{ finding.evidence.sourceLineEnd }}</span></div><blockquote>{{ finding.evidence.sourceText }}</blockquote><button class="text-action" (click)="jumpToSource(finding.evidence)"><svg lucideArrowUpRight></svg> {{ finding.evidence.section }}</button></div>
+                }
+              </details>
+            }
+          </div>
+        } @else { <div class="empty-state compact-empty"><strong>No findings identified</strong><p>The analysis returned no evidence-backed findings.</p></div> }
+      </section>
+
+      @if (data.aiReport; as report) {
+        <section class="ai-report-bottom">
+          <article class="panel insights-card"><div class="panel-heading"><div><h2>AI recommendations</h2><p>Actions grounded in the reviewed document</p></div><svg lucideSparkles class="heading-icon"></svg></div>
+            @for (item of report.findings; track item.title) { @if (item.recommendation) { <div class="insight-row"><span class="insight-dot yellow-dot"></span><span><strong>{{ item.title }}</strong><small>{{ item.recommendation }}</small></span></div> } }
+            @if (!report.findings.length) { <div class="inline-empty">No recommendations are needed based on the provided document.</div> }
+          </article>
+          <article class="panel insights-card"><div class="panel-heading"><div><h2>Priority action plan</h2><p>AI-prioritized next steps</p></div><svg lucideChartColumnIncreasing class="heading-icon"></svg></div>
+            @if (report.priorityActionPlan.length) { <ol class="action-plan-list">@for (action of report.priorityActionPlan; track $index) { <li>{{ action }}</li> }</ol> } @else { <div class="inline-empty">No priority actions were generated.</div> }
+          </article>
+          <article class="panel insights-card overall-assessment"><div class="panel-heading"><div><h2>Overall AI assessment</h2><p>Consolidated conclusion</p></div><svg lucideActivity class="heading-icon"></svg></div><p>{{ report.overallAssessment }}</p></article>
+        </section>
+      }
+
+      @if (!data.aiReport) {
+      <section class="result-bottom-grid">
+        <article class="panel insights-card"><div class="panel-heading"><div><h2>Compliance insights</h2><p>Compliance and policy observations</p></div><svg lucideShieldCheck class="heading-icon"></svg></div>
+          @if (data.keyFindings.filter(f => f.findingType === 'Compliance').length) {
+            @for (item of data.keyFindings.filter(f => f.findingType === 'Compliance'); track item.id) { <div class="insight-row"><span class="insight-dot"></span><span><strong>{{ item.title }}</strong><small>{{ item.description }}</small></span></div> }
+          } @else { <div class="inline-empty">No compliance findings were identified in this analysis.</div> }
+        </article>
+        <article class="panel insights-card"><div class="panel-heading"><div><h2>Recommendations</h2><p>Suggested next steps</p></div><svg lucideSparkles class="heading-icon"></svg></div>
+          @if (data.recommendations.length) {
+            @for (item of data.recommendations; track item.id) { <div class="insight-row"><span class="insight-dot yellow-dot"></span><span><strong>{{ item.title }}</strong><small>{{ item.description }}</small></span></div> }
+          } @else { <div class="inline-empty">No recommendations were returned for this document.</div> }
+        </article>
+      </section>
+      }
+    } @else {
+      <section class="panel result-placeholder"><span class="empty-icon"><svg lucideFileSearch></svg></span><div><strong>Your analysis results will appear here</strong><p>Upload a document or enter analysis context to get started.</p></div></section>
     }
+  }
+
+  @if (activeTab() === 'Analytics') {
+    <section class="page-heading">
+      <div><div class="eyebrow"><span class="eyebrow-dot"></span> WORKSPACE INSIGHTS</div><h1>Analytics</h1><p>Live metrics calculated from analysis history saved in this browser.</p></div>
+      <span class="local-data-note"><svg lucideCalendarDays></svg> {{ history().length }} saved records · Last 20 analyses</span>
+    </section>
+    <section class="analytics-summary">
+      <div><span>Documents analyzed</span><strong>{{ history().length }}</strong></div>
+      <div><span>Success rate</span><strong>{{ history().length ? (successfulHistory().length / history().length * 100 | number:'1.0-0') + '%' : '—' }}</strong></div>
+      <div><span>Critical risks</span><strong>{{ criticalRiskCount() }}</strong></div>
+      <div><span>Average confidence</span><strong>{{ averageScore() === null ? '—' : averageScore() + '%' }}</strong></div>
+    </section>
+    <section class="chart-grid analytics-charts">
+      <article class="panel chart-panel">
+        <div class="panel-heading"><div><h2>Document analysis trend</h2><p>Successful and failed attempts over time</p></div><div class="segmented-control"><button [class.selected]="trendPeriod() === 'daily'" (click)="selectTrendPeriod('daily')">7 days</button><button [class.selected]="trendPeriod() === 'weekly'" (click)="selectTrendPeriod('weekly')">8 weeks</button><button [class.selected]="trendPeriod() === 'monthly'" (click)="selectTrendPeriod('monthly')">6 months</button></div></div>
+        <div echarts [options]="trendOption()" class="chart chart-trend" role="img" aria-label="Document analysis trend chart"></div>
+      </article>
+      <article class="panel chart-panel">
+        <div class="panel-heading"><div><h2>Risk distribution</h2><p>Actual finding severity across saved reviews</p></div><svg lucideChartPie class="heading-icon"></svg></div>
+        <div echarts [options]="riskOption()" class="chart chart-donut" role="img" aria-label="Risk distribution chart"></div>
+        <div class="mini-legend"><span><i class="legend-critical"></i>Critical <strong>{{ riskDistribution().Critical }}</strong></span><span><i class="legend-high"></i>High <strong>{{ riskDistribution().High }}</strong></span><span><i class="legend-medium"></i>Medium <strong>{{ riskDistribution().Medium }}</strong></span><span><i class="legend-low"></i>Low <strong>{{ riskDistribution().Low }}</strong></span></div>
+      </article>
+      <article class="panel chart-panel">
+        <div class="panel-heading"><div><h2>Analysis performance</h2><p>Successful vs failed · Recent 6 weeks</p></div><svg lucideChartColumnIncreasing class="heading-icon"></svg></div>
+        <div echarts [options]="performanceOption()" class="chart chart-performance" role="img" aria-label="Weekly successful and failed analysis chart"></div>
+      </article>
+      <article class="panel chart-panel">
+        <div class="panel-heading"><div><h2>Document categories</h2><p>File types from actual analysis history</p></div><svg lucideFiles class="heading-icon"></svg></div>
+        <div echarts [options]="categoryOption()" class="chart chart-categories" role="img" aria-label="Document type breakdown chart"></div>
+        <div class="category-footnote">No PDF parser is enabled in the current API; PDF uploads are not included in supported analysis.</div>
+      </article>
+    </section>
+    @if (!history().length) { <div class="chart-empty-note"><svg lucideActivity></svg> Charts will populate after you complete analyses. No sample values are shown.</div> }
+  }
+
+  @if (activeTab() === 'History') {
+    <section class="page-heading history-heading">
+      <div><div class="eyebrow"><span class="eyebrow-dot"></span> YOUR WORKSPACE</div><h1>Analysis history</h1><p>Search, filter and reopen your recent document reviews.</p></div>
+      <button class="button button-primary" (click)="setTab('Document Analysis')"><svg lucideUpload></svg> New analysis</button>
+    </section>
+    <section class="panel history-panel">
+      <div class="history-toolbar">
+        <label class="search-field"><svg lucideSearch></svg><input [ngModel]="historySearch()" (ngModelChange)="setHistorySearch($event)" placeholder="Search documents…" aria-label="Search analysis history"></label>
+        <div class="history-filters">
+          <label><span>Status</span><select [ngModel]="historyStatus()" (ngModelChange)="setHistoryStatus($event)"><option value="All">All statuses</option><option value="Successful">Successful</option><option value="Failed">Failed</option></select></label>
+          <label><span>Sort by</span><select [ngModel]="historySort()" (ngModelChange)="setHistorySort($event)"><option value="date">Most recent</option><option value="name">Document name</option><option value="risk">Risk level</option></select></label>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="history-table">
+          <thead><tr><th>Document name</th><th>Document type</th><th>Analysis date</th><th>Risk level</th><th>Status</th><th class="actions-heading">Actions</th></tr></thead>
+          <tbody>
+            @for (entry of pagedHistory(); track entry.id) {
+              <tr>
+                <td><span class="table-file"><span class="file-type-icon"><svg lucideFileText></svg></span><span><strong>{{ entry.documentTitle }}</strong><small>{{ formatBytes(entry.fileSize) }}</small></span></span></td>
+                <td><span class="type-chip">{{ entry.documentType }}</span></td>
+                <td><span class="date-cell">{{ entry.analysedAt | date:'MMM d, y' }}<small>{{ entry.analysedAt | date:'h:mm a' }}</small></span></td>
+                <td><span class="risk-badge" [class]="riskLevel(entry).toLowerCase()"><i></i>{{ riskLevel(entry) }}</span></td>
+                <td><span class="status-badge" [class.success]="entry.status === 'Successful'" [class.failed]="entry.status === 'Failed'"><i></i>{{ entry.status }}</span></td>
+                <td><div class="table-actions"><button class="table-action" [disabled]="!entry.result" title="View analysis" aria-label="View analysis" (click)="viewHistoryEntry(entry)"><svg lucideEye></svg></button><button class="table-action" [disabled]="!entry.result" title="Download report" aria-label="Download report" (click)="downloadHistoryReport(entry)"><svg lucideDownload></svg></button><button class="table-action danger-action" title="Remove from history" aria-label="Remove from history" (click)="removeHistory(entry)"><svg lucideTrash2></svg></button></div></td>
+              </tr>
+            } @empty {
+              <tr><td colspan="6"><div class="empty-state table-empty"><span class="empty-icon"><svg lucideSearch></svg></span><strong>{{ history().length ? 'No matching analyses' : 'No analysis history yet' }}</strong><p>{{ history().length ? 'Try a different search or status filter.' : 'Completed reviews will be saved here in this browser.' }}</p></div></td></tr>
+            }
+          </tbody>
+        </table>
+      </div>
+      <div class="table-footer"><span>Showing {{ filteredHistory().length ? ((historyPage() - 1) * historyPageSize + 1) : 0 }}–{{ Math.min(historyPage() * historyPageSize, filteredHistory().length) }} of {{ filteredHistory().length }} analyses</span><div class="pagination"><button class="table-action" aria-label="Previous page" [disabled]="historyPage() <= 1" (click)="previousHistoryPage()"><svg lucideChevronLeft></svg></button><span>Page {{ historyPage() }} of {{ historyPageCount() }}</span><button class="table-action" aria-label="Next page" [disabled]="historyPage() >= historyPageCount()" (click)="nextHistoryPage()"><svg lucideChevronRight></svg></button></div></div>
+    </section>
+    <p class="history-storage-note"><svg lucideShieldCheck></svg> History is stored locally in this browser and is limited to the 20 most recent analyses.</p>
   }
 </main>

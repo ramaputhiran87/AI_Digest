@@ -6,36 +6,18 @@ using AI.Digest.Api.Models;
 
 namespace AI.Digest.Api.Services;
 
-public sealed class DocumentAnalysisService(AgentServices agents)
+public sealed class DocumentAnalysisService(IAnalysisProvider provider)
 {
-    public Task<DigestResult> AnalyseAsync(string title, string content, string? useCase)
+    public async Task<DigestResult> AnalyseAsync(
+        string title,
+        string content,
+        string? useCase,
+        CancellationToken cancellationToken = default,
+        string? explicitMode = null)
     {
         var document = Parse(title, content);
-        var requirement = agents.RequirementAgent(document);
-        var security = agents.SecurityAgent(document);
-        var compliance = agents.ComplianceAgent(document);
-        var impact = agents.BusinessImpactAgent(document);
-        var human = agents.HumanReviewAgent(document);
-        var contradictionDetails = agents.ContradictionAgent(document);
-        var opportunities = agents.DreamAgent(document);
-        var hiddenRisks = agents.DarkMatterAgent(document);
-        var futureRisks = agents.TimeMachineAgent(document);
-        var rulesRecommendations = agents.RecommendationAgent(document);
-        var criticalRiskFindings = agents.CriticalRiskAgent(document);
-        var highPriorityFindings = agents.HighPriorityAgent(document);
-
-        var all = requirement
-            .Concat(security)
-            .Concat(compliance)
-            .Concat(impact)
-            .Concat(human)
-            .Concat(opportunities)
-            .Concat(hiddenRisks)
-            .Concat(futureRisks)
-            .Concat(rulesRecommendations)
-            .Concat(criticalRiskFindings)
-            .Concat(highPriorityFindings)
-            .ToList();
+        var analysis = await provider.AnalyseAsync(document, useCase, cancellationToken, explicitMode);
+        var all = analysis.Findings;
         all = all.Where(f => f.Evidence is not null)
             .GroupBy(f => $"{f.FindingType}:{f.AgentName}:{f.Evidence?.SourceText}")
             .Select(g => g.OrderByDescending(f => f.Score).First()).ToList();
@@ -45,38 +27,38 @@ public sealed class DocumentAnalysisService(AgentServices agents)
             .Select(f => f.Evidence!)
             .DistinctBy(e => $"{e.SourceLineStart}:{e.SourceText}")
             .ToList();
-        var recommendations = all
-            .Where(f => f.FindingType == "Recommendation")
-            .Take(20).ToList();
+        var recommendations = analysis.Recommendations.Take(20).ToList();
 
-        var contradictionFindings = contradictionDetails.Select(detail =>
+        var contradictionFindings = analysis.Contradictions.Select(detail =>
             new ContradictionFinding(
                 new Finding
                 {
                     FindingType = "Contradiction",
-                    AgentName = "ContradictionAgent",
+                    AgentName = analysis.ModelInfo is null
+                        ? "DeterministicContradictionAgent" : "AIContradictionAgent",
                     Title = $"{detail.Subject}: {detail.ValueA} vs {detail.ValueB}",
                     Description = $"Conflicting values detected for {detail.Subject}.",
                     Priority = "High",
                     Score = 82,
                     Confidence = detail.Confidence,
-                    ConfidenceBand = "Strong Evidence",
+                    ConfidenceBand = analysis.ModelInfo is null
+                        ? "Strong Evidence" : "AI Evidence",
                     Evidence = detail.EvidenceA
                 },
                 detail.EvidenceA,
                 detail.EvidenceB)).ToList();
 
         var evidenceQuality = evidence.Count == 0 ? 0 : 100;
-        var consistency = contradictionDetails.Count == 0 ? 100 :
-            Math.Max(60, 100 - contradictionDetails.Count * 10);
-        var securityScore = security.Count == 0 ? 100 :
-            (int)Math.Round(security.Average(f => f.Confidence));
-        var complianceScore = compliance.Count == 0 ? 100 :
-            (int)Math.Round(compliance.Average(f => f.Confidence));
-        var darkMatterScore = hiddenRisks.Count == 0 ? 100 :
-            (int)Math.Round(hiddenRisks.Average(f => f.Confidence));
-        var timeMachineScore = futureRisks.Count == 0 ? 100 :
-            (int)Math.Round(futureRisks.Average(f => f.Confidence));
+        var consistency = analysis.Contradictions.Count == 0 ? 100 :
+            Math.Max(60, 100 - analysis.Contradictions.Count * 10);
+        var securityScore = analysis.SecurityFindings.Count == 0 ? 100 :
+            (int)Math.Round(analysis.SecurityFindings.Average(f => f.Confidence));
+        var complianceScore = analysis.ComplianceFindings.Count == 0 ? 100 :
+            (int)Math.Round(analysis.ComplianceFindings.Average(f => f.Confidence));
+        var darkMatterScore = analysis.HiddenRisks.Count == 0 ? 100 :
+            (int)Math.Round(analysis.HiddenRisks.Average(f => f.Confidence));
+        var timeMachineScore = analysis.FutureRisks.Count == 0 ? 100 :
+            (int)Math.Round(analysis.FutureRisks.Average(f => f.Confidence));
         var confidence = (int)Math.Round(
             evidenceQuality * 0.30 +
             securityScore * 0.20 +
@@ -85,8 +67,8 @@ public sealed class DocumentAnalysisService(AgentServices agents)
             darkMatterScore * 0.10 +
             timeMachineScore * 0.10);
         confidence = evidence.Count == 0 ? 0 : Math.Clamp(confidence, 0, 100);
-        var compressed = BuildCompressedDocument(document, all, contradictionFindings, human,
-            recommendations, hiddenRisks, futureRisks, opportunities);
+        var compressed = BuildCompressedDocument(document, all, contradictionFindings, analysis.HumanReview,
+            recommendations, analysis.HiddenRisks, analysis.FutureRisks, analysis.Opportunities);
         var highPriority = all.Where(f => f.Priority == "High").ToList();
         var criticalRisks = all.Where(f => f.Priority == "Critical").ToList();
         var dependencies = all.Where(f => f.FindingType == "Dependency").ToList();
@@ -95,20 +77,23 @@ public sealed class DocumentAnalysisService(AgentServices agents)
         {
             DocumentTitle = document.Title,
             DocumentType = document.SourceType,
-            ExecutiveSummary = evidence.Count == 0
+            AnalysisProvider = analysis.ProviderName,
+            ModelInfo = analysis.ModelInfo,
+            AiReport = analysis.AiReport,
+            ExecutiveSummary = analysis.ExecutiveSummary ?? (evidence.Count == 0
                 ? "No evidence-backed findings were identified. Human review is required."
-                : $"Analysis identified {all.Count} evidence-backed findings, {contradictionDetails.Count} contradictions, {human.Count} human-review items, and {opportunities.Count} opportunities across {all.Select(f => f.AgentName).Distinct().Count()} specialist agents.",
+                : $"Analysis identified {all.Count} evidence-backed findings, {analysis.Contradictions.Count} contradictions, {analysis.HumanReview.Count} human-review items, and {analysis.Opportunities.Count} opportunities across {all.Select(f => f.AgentName).Distinct().Count()} specialist agents."),
             HighPriorityItems = highPriority.Take(50).ToList(),
             CriticalRisks = criticalRisks.Take(50).ToList(),
             Dependencies = dependencies.Take(50).ToList(),
             Contradictions = contradictionFindings,
-            ContradictionDetails = contradictionDetails,
-            HumanReviewRequired = human.Take(20).ToList(),
+            ContradictionDetails = analysis.Contradictions,
+            HumanReviewRequired = analysis.HumanReview.Take(20).ToList(),
             Recommendations = recommendations,
             KeyFindings = all.Take(50).ToList(),
-            HiddenRisks = hiddenRisks.Take(20).ToList(),
-            FutureRisks = futureRisks.Take(20).ToList(),
-            StrategicOpportunities = opportunities.Take(20).ToList(),
+            HiddenRisks = analysis.HiddenRisks.Take(20).ToList(),
+            FutureRisks = analysis.FutureRisks.Take(20).ToList(),
+            StrategicOpportunities = analysis.Opportunities.Take(20).ToList(),
             ActionItems = actionItems.Take(20).ToList(),
             ConfidenceScore = confidence,
             ConfidenceBand = confidence >= 90 ? "Visionary Confidence" : confidence >= 75 ? "Strong Evidence" :
@@ -116,7 +101,7 @@ public sealed class DocumentAnalysisService(AgentServices agents)
             Evidence = evidence,
             CompressedDocument = compressed
         };
-        return Task.FromResult(result);
+        return result;
     }
 
     private static CompressedDocument BuildCompressedDocument(
@@ -234,6 +219,7 @@ public sealed class DocumentAnalysisService(AgentServices agents)
         };
         var lines = content.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         var sections = new List<DocumentSection>();
+        var sourceLines = new List<DocumentSourceLine>();
         var statements = new List<Statement>();
         var currentHeading = "Document";
         var sectionStart = 1;
@@ -241,6 +227,7 @@ public sealed class DocumentAnalysisService(AgentServices agents)
         var headingLevel = 1;
         var sectionPath = new List<string>();
         var noiseTags = new[] { "script", "style", "nav", "footer", "header" };
+        var ignoredHtmlElement = "";
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -248,11 +235,48 @@ public sealed class DocumentAnalysisService(AgentServices agents)
             var line = rawLine.Trim();
             if (string.IsNullOrWhiteSpace(line)) continue;
 
+            if (extension is ".html" or ".htm")
+            {
+                if (ignoredHtmlElement.Length > 0)
+                {
+                    var closingTag = Regex.Match(line,
+                        $@"</\s*{Regex.Escape(ignoredHtmlElement)}\s*>",
+                        RegexOptions.IgnoreCase);
+                    if (!closingTag.Success) continue;
+
+                    ignoredHtmlElement = "";
+                    line = line[(closingTag.Index + closingTag.Length)..].Trim();
+                    if (line.Length == 0) continue;
+                }
+
+                var openingTag = Regex.Match(line,
+                    @"<\s*(script|style|nav|footer|header)\b[^>]*>",
+                    RegexOptions.IgnoreCase);
+                if (openingTag.Success)
+                {
+                    var tagName = openingTag.Groups[1].Value;
+                    var closingTag = Regex.Match(line[openingTag.Index..],
+                        $@"</\s*{Regex.Escape(tagName)}\s*>",
+                        RegexOptions.IgnoreCase);
+                    if (!closingTag.Success) ignoredHtmlElement = tagName;
+                    continue;
+                }
+
+                if (noiseTags.Any(tag => Regex.IsMatch(line,
+                    $@"</\s*{Regex.Escape(tag)}\s*>", RegexOptions.IgnoreCase)))
+                    continue;
+
+                line = StripHtmlLine(line);
+                if (string.IsNullOrWhiteSpace(line)) continue;
+            }
+
             if (extension == ".json")
             {
                 var properties = ExtractJsonProperties(rawLine);
                 if (properties.Count > 0)
                 {
+                    sourceLines.Add(new DocumentSourceLine(
+                        i + 1, currentHeading, string.Join("; ", properties), rawLine.Trim()));
                     statements.AddRange(properties.Select(property =>
                         new Statement(Guid.NewGuid(), property, currentHeading, i + 1, i + 1, rawLine.Trim())));
                     continue;
@@ -263,6 +287,8 @@ public sealed class DocumentAnalysisService(AgentServices agents)
                 var elements = ExtractXmlElements(rawLine);
                 if (elements.Count > 0)
                 {
+                    sourceLines.Add(new DocumentSourceLine(
+                        i + 1, currentHeading, string.Join("; ", elements), rawLine.Trim()));
                     statements.AddRange(elements.Select(element =>
                         new Statement(Guid.NewGuid(), element, currentHeading, i + 1, i + 1, rawLine.Trim())));
                     continue;
@@ -271,11 +297,7 @@ public sealed class DocumentAnalysisService(AgentServices agents)
 
             if (extension is ".html" or ".htm")
             {
-                var lower = line.ToLowerInvariant();
-                if (noiseTags.Any(tag => lower.Contains($"<{tag}") || lower.Contains($"</{tag}>")))
-                    continue;
-                line = StripHtmlLine(line);
-                if (string.IsNullOrWhiteSpace(line)) continue;
+                line = Regex.Replace(line, @"\s+", " ").Trim();
             }
             var markdownHeading = Regex.Match(line, @"^(#{1,6})\s+(.+)$");
             var explicitLabel = Regex.IsMatch(line, @"^(?:[-*+]|\d+[.)])?\s*(?:\[[ xX]\]\s*)?[A-Za-z]+(?:\s[A-Za-z]+)?:");
@@ -289,13 +311,20 @@ public sealed class DocumentAnalysisService(AgentServices agents)
                     : line.TrimEnd(':');
                 if (sectionPath.Count > headingLevel - 1)
                     sectionPath.RemoveRange(headingLevel - 1, sectionPath.Count - (headingLevel - 1));
+                sourceLines.Add(new DocumentSourceLine(
+                    i + 1,
+                    string.Join(" > ", sectionPath.Append(heading)),
+                    heading,
+                    extension is ".html" or ".htm" ? line : rawLine.Trim()));
                 sectionPath.Add(heading);
                 currentHeading = string.Join(" > ", sectionPath);
                 sectionStart = i + 1;
             }
             else
             {
-                statements.Add(new Statement(Guid.NewGuid(), line, currentHeading, i + 1, i + 1, rawLine.Trim()));
+                var evidence = extension is ".html" or ".htm" ? line : rawLine.Trim();
+                sourceLines.Add(new DocumentSourceLine(i + 1, currentHeading, line, evidence));
+                statements.Add(new Statement(Guid.NewGuid(), line, currentHeading, i + 1, i + 1, evidence));
             }
         }
         sections.Add(new DocumentSection(++headingIndex, currentHeading, sectionStart, lines.Length, "", headingLevel));
@@ -304,11 +333,11 @@ public sealed class DocumentAnalysisService(AgentServices agents)
             Title = title,
             SourceType = type,
             Sections = sections,
+            SourceLines = sourceLines,
             Statements = statements,
             Metadata = new Dictionary<string, string>
             {
-                ["LineCount"] = lines.Length.ToString(),
-                ["UseDeterministicAnalysis"] = "true"
+                ["LineCount"] = lines.Length.ToString()
             }
         };
     }
