@@ -13,10 +13,19 @@ public sealed class DocumentAnalysisService(IAnalysisProvider provider)
         string content,
         string? useCase,
         CancellationToken cancellationToken = default,
-        string? explicitMode = null)
+        string? explicitMode = null,
+        bool allowCloudProcessing = false)
     {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            throw new AnalysisProviderException(
+                "Document content is required.",
+                failureCode: AnalysisFailureCode.InvalidInput);
+        }
+
         var document = Parse(title, content);
-        var analysis = await provider.AnalyseAsync(document, useCase, cancellationToken, explicitMode);
+        var analysis = await provider.AnalyseAsync(
+            document, useCase, cancellationToken, explicitMode, allowCloudProcessing);
         var all = analysis.Findings;
         all = all.Where(f => f.Evidence is not null)
             .GroupBy(f => $"{f.FindingType}:{f.AgentName}:{f.Evidence?.SourceText}")

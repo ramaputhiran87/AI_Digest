@@ -1,14 +1,12 @@
-using System.Text.Json;
 using AI.Digest.Api.Models;
 
 namespace AI.Digest.Api.Services;
 
 public sealed class PresentationPlanningService(
     IConfiguration configuration,
-    IEnumerable<IAiModelClient> modelClients)
+    AiInferenceRouter inferenceRouter,
+    AiProviderConfiguration providerConfiguration)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     public async Task<PresentationDocument> PlanAsync(
         PresentationRequest request,
         PresentationSource source,
@@ -17,10 +15,11 @@ public sealed class PresentationPlanningService(
         if (string.IsNullOrWhiteSpace(source.Text))
             throw new AnalysisProviderException("The presentation source contains no usable content.");
 
-        var providerId = configuration["Analysis:Provider"] ?? "Gemini";
-        var client = modelClients.FirstOrDefault(client =>
-            client.ProviderId.Equals(providerId, StringComparison.OrdinalIgnoreCase))
-            ?? throw new AnalysisProviderException($"Presentation provider '{providerId}' is unavailable.");
+        var configuredProvider = configuration["Analysis:Provider"]?.Trim();
+        var providerId = string.IsNullOrWhiteSpace(configuredProvider) ||
+                         configuredProvider.Equals("Configured", StringComparison.OrdinalIgnoreCase)
+            ? providerConfiguration.ProviderOrder[0]
+            : configuredProvider;
 
         var slideCount = request.SlideCount;
         if (slideCount is < 5 or > 30)
@@ -76,21 +75,20 @@ public sealed class PresentationPlanningService(
             {{source.Text[..Math.Min(source.Text.Length, 60000)]}}
             """;
 
-        var inference = await client.GenerateJsonAsync(system, prompt, cancellationToken);
-        PresentationPlan plan;
-        try
-        {
-            plan = JsonSerializer.Deserialize<PresentationPlan>(inference.Content, JsonOptions)
-                ?? throw new JsonException("Presentation plan was null.");
-        }
-        catch (JsonException exception)
-        {
-            throw new AnalysisProviderException($"{client.ProviderName} returned invalid presentation JSON.", exception);
-        }
-
-        if (plan.Slides.Count != slideCount)
-            throw new AnalysisProviderException(
-                $"The model returned {plan.Slides.Count} slides; {slideCount} were requested.");
+        var inference = await inferenceRouter.GenerateJsonAsync<PresentationPlan>(
+            providerId,
+            system,
+            prompt,
+            request.AllowCloudProcessing,
+            cancellationToken,
+            plan =>
+            {
+                if (plan.Slides is null || plan.Slides.Count != slideCount)
+                    throw new AnalysisProviderException(
+                        $"The model returned {plan.Slides?.Count ?? 0} slides; {slideCount} were requested.");
+                return plan;
+            });
+        var plan = inference.Value;
 
         var slides = plan.Slides
             .Select((slide, index) => new PresentationSlide
@@ -119,8 +117,8 @@ public sealed class PresentationPlanningService(
             Theme = "AI_Digest Navy Blue",
             AspectRatio = request.AspectRatio,
             TotalSlides = slides.Count,
-            AIProvider = client.ProviderName,
-            AIModel = client.ModelName,
+            AIProvider = inference.ProviderName,
+            AIModel = inference.ModelName,
             Slides = slides
         };
     }

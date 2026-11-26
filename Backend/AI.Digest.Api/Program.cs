@@ -1,10 +1,32 @@
+using System.Net;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Threading.RateLimiting;
 using AI.Digest.Api.Data;
 using AI.Digest.Api.Models;
 using AI.Digest.Api.Services;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Identity.Web;
 
 var builder = WebApplication.CreateBuilder(args);
+var configuredDataProtectionKeyPath = builder.Configuration["AI_DATA_PROTECTION_KEYS_PATH"];
+var dataProtectionKeyPath = Path.GetFullPath(
+    string.IsNullOrWhiteSpace(configuredDataProtectionKeyPath)
+        ? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "AI.Digest",
+            "DataProtectionKeys")
+        : configuredDataProtectionKeyPath);
+Directory.CreateDirectory(dataProtectionKeyPath);
+if (!OperatingSystem.IsWindows())
+{
+    File.SetUnixFileMode(
+        dataProtectionKeyPath,
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+}
 
 var entraConfigured =
     !string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:TenantId"]) &&
@@ -15,22 +37,115 @@ if (entraConfigured)
         builder.Configuration.GetSection("AzureAd"));
 }
 builder.Services.AddAuthorization();
+var configuredCorsOrigins = builder.Configuration["Cors:Origins"];
+var corsOrigins = string.IsNullOrWhiteSpace(configuredCorsOrigins)
+    ? new[] { "http://localhost:4200", "http://127.0.0.1:4200" }
+    : configuredCorsOrigins.Split(
+        ',',
+        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
-    policy.WithOrigins(builder.Configuration["Cors:Origins"]?.Split(',') ?? ["http://localhost:4200"])
-          .AllowAnyHeader().AllowAnyMethod()));
+    policy.WithOrigins(corsOrigins)
+          .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("analysis", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: GetAnalysisUserKey(context),
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = 5,
+                QueueLimit = 0,
+                Window = TimeSpan.FromMinutes(1)
+            }));
+    options.AddPolicy("consent", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: GetAnalysisUserKey(context),
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = 30,
+                QueueLimit = 0,
+                Window = TimeSpan.FromMinutes(1)
+            }));
+    options.AddPolicy("ai-admin", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown-admin",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = 10,
+                QueueLimit = 0,
+                Window = TimeSpan.FromMinutes(1)
+            }));
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.ContentType = "application/json";
+        if (context.HttpContext.Request.Path.StartsWithSegments("/api/admin/ai"))
+        {
+            context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            await JsonSerializer.SerializeAsync(
+                context.HttpContext.Response.Body,
+                new { error = "Too many administrator requests. Please wait and try again." },
+                cancellationToken: cancellationToken);
+            return;
+        }
+
+        if (context.HttpContext.Request.Path.StartsWithSegments("/api/consent/cloud-ai"))
+        {
+            context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            await JsonSerializer.SerializeAsync(
+                context.HttpContext.Response.Body,
+                new { error = "Too many consent requests. Please wait and try again." },
+                cancellationToken: cancellationToken);
+            return;
+        }
+
+        await JsonSerializer.SerializeAsync(
+            context.HttpContext.Response.Body,
+            new
+            {
+                success = false,
+                provider = "",
+                model = "",
+                analysis = (object?)null,
+                summary = "",
+                keyFindings = Array.Empty<object>(),
+                recommendations = Array.Empty<object>(),
+                warnings = Array.Empty<string>(),
+                processingTime = 0,
+                error = "Too many analysis requests. Please wait and try again."
+            },
+            cancellationToken: cancellationToken);
+    };
+});
 
 builder.Services.AddDbContext<DigestDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DigestDb")));
 builder.Services.AddSingleton<AgentServices>();
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeyPath))
+    .SetApplicationName("AI.Digest.Api");
+builder.Services.AddSingleton<AiAdminSettingsStore>();
+builder.Services.AddSingleton<CloudAiConsentStore>();
+builder.Services.AddSingleton<CloudAiConsentService>();
+builder.Services.AddSingleton<AiProviderConfiguration>();
+builder.Services.AddSingleton<AiProviderHealthTracker>();
+builder.Services.AddHostedService<AiProviderStartupHealthCheck>();
+builder.Services.AddSingleton<AiDailyUsageLimiter>();
+builder.Services.AddMemoryCache(options => options.SizeLimit = 1000);
+builder.Services.AddSingleton<AnalysisResultCache>();
 builder.Services.AddScoped<DeterministicAnalysisProvider>();
 builder.Services.AddHttpClient<GeminiAnalysisProvider>(client =>
-    client.Timeout = TimeSpan.FromMinutes(5));
-builder.Services.AddHttpClient<OllamaAnalysisProvider>(client =>
-    client.Timeout = TimeSpan.FromMinutes(5));
+    client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddHttpClient<GroqAnalysisProvider>(client =>
+    client.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddScoped<IAiModelClient>(services =>
     services.GetRequiredService<GeminiAnalysisProvider>());
 builder.Services.AddScoped<IAiModelClient>(services =>
-    services.GetRequiredService<OllamaAnalysisProvider>());
+    services.GetRequiredService<GroqAnalysisProvider>());
+builder.Services.AddScoped<AiInferenceRouter>();
 builder.Services.AddScoped<LlmAnalysisProvider>();
 builder.Services.AddScoped<IAnalysisProvider, AnalysisProviderRouter>();
 builder.Services.AddScoped<DocumentAnalysisService>();
@@ -38,7 +153,8 @@ builder.Services.AddHttpClient<PresentationSourceProviders>(client =>
     client.Timeout = TimeSpan.FromSeconds(45));
 builder.Services.AddScoped<PresentationPlanningService>();
 builder.Services.AddScoped<PresentationGenerationService>();
-builder.Services.AddSingleton<PresentationStudioService>();
+builder.Services.AddSingleton<PresentationHistoryStore>();
+builder.Services.AddScoped<PresentationStudioService>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
 
@@ -48,11 +164,219 @@ if (entraConfigured)
 {
     app.UseAuthentication();
 }
+app.UseRateLimiter();
 app.UseAuthorization();
 app.MapOpenApi();
+app.MapAiAdminEndpoints();
+var consentEndpoints = app.MapGroup("/api/consent/cloud-ai")
+    .RequireRateLimiting("consent");
+if (entraConfigured)
+{
+    consentEndpoints.RequireAuthorization();
+}
+else
+{
+    consentEndpoints.AddEndpointFilter(async (context, next) =>
+    {
+        var remoteAddress = context.HttpContext.Connection.RemoteIpAddress;
+        if (remoteAddress is null || !IPAddress.IsLoopback(remoteAddress))
+            return Results.Unauthorized();
+        return await next(context);
+    });
+}
 
-app.MapPost("/api/documents/analyse", async (HttpRequest request,
+consentEndpoints.MapGet("/", (HttpContext context, CloudAiConsentService consent) =>
+{
+    context.Response.Headers["Cache-Control"] = "no-store";
+    try
+    {
+        return Results.Ok(consent.GetStatus(context));
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return Results.Unauthorized();
+    }
+});
+consentEndpoints.MapPost("/", (
+    HttpContext context,
+    CloudAiConsentRequest request,
+    CloudAiConsentService consent,
+    ILogger<Program> logger) =>
+{
+    context.Response.Headers["Cache-Control"] = "no-store";
+    try
+    {
+        return Results.Ok(consent.Grant(context, request));
+    }
+    catch (ArgumentException)
+    {
+        return Results.BadRequest(new { error = "Consent must match the current cloud AI policy." });
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return Results.Unauthorized();
+    }
+    catch (CloudAiConsentPersistenceException exception)
+    {
+        logger.LogError(
+            "Cloud AI consent could not be persisted. Exception type: {ExceptionType}",
+            exception.InnerException?.GetType().Name ?? exception.GetType().Name);
+        return Results.Json(
+            new
+            {
+                code = "AI_CONSENT_PERSISTENCE_FAILED",
+                error = "Consent could not be stored. Please try again."
+            },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+});
+consentEndpoints.MapDelete("/", (
+    HttpContext context,
+    CloudAiConsentService consent,
+    ILogger<Program> logger) =>
+{
+    context.Response.Headers["Cache-Control"] = "no-store";
+    try
+    {
+        return Results.Ok(consent.Withdraw(context));
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return Results.Unauthorized();
+    }
+    catch (CloudAiConsentPersistenceException exception)
+    {
+        logger.LogError(
+            "Cloud AI consent withdrawal could not be persisted. Exception type: {ExceptionType}",
+            exception.InnerException?.GetType().Name ?? exception.GetType().Name);
+        return Results.Json(
+            new
+            {
+                code = "AI_CONSENT_PERSISTENCE_FAILED",
+                error = "Consent could not be withdrawn. Please try again."
+            },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+});
+app.MapGet("/api/ai/status", (
+    HttpContext context,
+    AiProviderConfiguration configuration,
+    IEnumerable<IAiModelClient> clients,
+    AiProviderHealthTracker healthTracker) =>
+{
+    var providers = clients
+        .OrderBy(client => configuration.Priority(client.ProviderId))
+        .Select(client =>
+        {
+            var health = healthTracker.GetSnapshot(client.ProviderId);
+            var enabled = configuration.IsEnabledFromConfiguration(client.ProviderId);
+            var modelAvailable = configuration.HasSupportedModel(client.ProviderId);
+            var credentialConfigured = client.IsConfigured;
+            var freeAllowed = configuration.IsAllowedInFreeOnlyMode(client.ProviderId);
+            var status = !credentialConfigured
+                ? "Not configured"
+                : !enabled
+                    ? "Disabled"
+                    : !modelAvailable
+                        ? "Unsupported model"
+                        : !freeAllowed
+                            ? "Blocked by free-only policy"
+                            : health.LastSafeErrorCategory is not null
+                                ? "Temporarily unavailable"
+                                : health.LastSuccessfulAt is not null
+                                    ? "Connected"
+                                    : "Connection check pending";
+            return new
+            {
+                providerId = client.ProviderId,
+                providerName = client.ProviderName,
+                model = client.ModelName,
+                enabled,
+                credentialConfigured,
+                inferenceAllowed = configuration.Enabled && enabled && modelAvailable &&
+                                   freeAllowed,
+                connectionStatus = status,
+                circuitOpen = health.CircuitOpenUntil > DateTimeOffset.UtcNow,
+                lastSafeErrorCategory = MapAiErrorCategory(health.LastSafeErrorCategory),
+                lastSuccessfulAt = health.LastSuccessfulAt
+            };
+        })
+        .ToArray();
+    var usable = providers
+        .Where(provider => provider.credentialConfigured &&
+                           provider.enabled &&
+                           provider.inferenceAllowed)
+        .ToArray();
+    var active = usable.FirstOrDefault(provider =>
+        !provider.circuitOpen && provider.lastSafeErrorCategory is null) ??
+        usable.FirstOrDefault(provider => !provider.circuitOpen) ??
+        usable.FirstOrDefault();
+    var fallback = providers.Skip(1).FirstOrDefault();
+    var lastSuccessful = providers
+        .Where(provider => provider.lastSuccessfulAt is not null)
+        .OrderByDescending(provider => provider.lastSuccessfulAt)
+        .FirstOrDefault();
+    var canTestConnection = context.User.Identity?.IsAuthenticated == true &&
+                            context.User.IsInRole("Admin");
+    return Results.Ok(new
+    {
+        configuredProviders = providers
+            .Where(provider => provider.credentialConfigured)
+            .Select(provider => provider.providerId),
+        serviceStatus = active is not null &&
+                        !active.circuitOpen &&
+                        active.lastSafeErrorCategory is null
+            ? "Online"
+            : "Offline",
+        activeProvider = active?.providerId,
+        activeProviderName = active?.providerName,
+        activeModel = active?.model,
+        credentialConfigured = active is not null,
+        connectionStatus = active?.connectionStatus ??
+            (providers.Any(provider => provider.credentialConfigured)
+                ? "No provider is available under current policy"
+                : "AI service credentials are not configured on the server."),
+        fallbackProviderStatus = !configuration.FallbackEnabled
+            ? "Disabled"
+            : fallback?.connectionStatus ?? "Not configured",
+        lastSuccessfulRequest = lastSuccessful is null
+            ? null
+            : new
+            {
+                provider = lastSuccessful.providerName,
+                occurredAt = lastSuccessful.lastSuccessfulAt
+            },
+        lastSafeErrorCategory = active?.lastSafeErrorCategory,
+        fallbackAvailable = configuration.FallbackEnabled && usable.Length > 1,
+        canTestConnection,
+        requiresExplicitCloudConsent = configuration.CloudConsentRequired,
+        providers
+    });
+});
+
+var analysisEndpoints = app.MapGroup("/api/documents");
+if (entraConfigured)
+{
+    analysisEndpoints.RequireAuthorization();
+}
+else
+{
+    analysisEndpoints.AddEndpointFilter(async (context, next) =>
+    {
+        var remoteAddress = context.HttpContext.Connection.RemoteIpAddress;
+        if (remoteAddress is null || !IPAddress.IsLoopback(remoteAddress))
+            return Results.Unauthorized();
+        return await next(context);
+    });
+}
+
+analysisEndpoints.MapPost("/analyse", async (HttpRequest request,
     DocumentAnalysisService analysis,
+    AiProviderConfiguration aiConfiguration,
+    IEnumerable<IAiModelClient> aiClients,
+    CloudAiConsentService consent,
+    AiDailyUsageLimiter dailyUsage,
+    AnalysisResultCache resultCache,
     CancellationToken cancellationToken) =>
 {
     if (!request.HasFormContentType)
@@ -62,56 +386,142 @@ app.MapPost("/api/documents/analyse", async (HttpRequest request,
     var file = form.Files["file"];
     var useCase = form["useCase"].ToString();
     var analysisMode = form["analysisMode"].ToString();
+    var consentScope = form["cloudConsentScope"].ToString();
+    var consentPolicyVersion = form["cloudConsentPolicyVersion"].ToString();
+    var consentValid = consent.HasValidConsent(
+        request.HttpContext,
+        consentScope,
+        consentPolicyVersion);
+    if (RequiresCloudConsent(aiConfiguration, aiClients, analysisMode) && !consentValid)
+        return MapAnalysisFailure(new AnalysisProviderException(
+            "Cloud analysis requires your explicit consent.",
+            failureCode: AnalysisFailureCode.CloudConsentRequired));
+    var allowCloudProcessing = !aiConfiguration.CloudConsentRequired || consentValid;
 
     if (file is null)
         return Results.BadRequest(new { error = "A document or use-case text is required." });
+    if (file.Length == 0)
+        return Results.BadRequest(new { error = "The selected document is empty." });
     if (file.Length > 20 * 1024 * 1024)
         return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+    if (useCase.Length > aiConfiguration.MaxUseCaseCharacters)
+        return Results.BadRequest(new { error = "Analysis context exceeds the configured length limit." });
+    if (!IsSupportedDocument(file.FileName))
+        return Results.BadRequest(new { error = "Unsupported document type." });
 
     try
     {
         await using var stream = file.OpenReadStream();
         using var reader = new StreamReader(stream);
         var content = await reader.ReadToEndAsync(cancellationToken);
-        var result = await analysis.AnalyseAsync(
-            file.FileName, content, useCase, cancellationToken, analysisMode);
+        if (string.IsNullOrWhiteSpace(content))
+            return Results.BadRequest(new { error = "The selected document is empty." });
+        if (content.Length > aiConfiguration.MaxInputCharacters)
+            return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+
+        var result = await resultCache.GetOrCreateAsync(
+            GetAnalysisUserKey(request.HttpContext),
+            Path.GetFileName(file.FileName),
+            content,
+            useCase,
+            analysisMode,
+            allowCloudProcessing,
+            async () =>
+            {
+                if (!dailyUsage.TryConsume(
+                    GetAnalysisUserKey(request.HttpContext),
+                    aiConfiguration.DailyUsageLimit,
+                    DateOnly.FromDateTime(DateTime.UtcNow)))
+                {
+                    throw new AnalysisProviderException(
+                        "Daily analysis limit reached.",
+                        failureCode: AnalysisFailureCode.DailyLimitReached);
+                }
+
+                return await analysis.AnalyseAsync(
+                    Path.GetFileName(file.FileName),
+                    content,
+                    useCase,
+                    cancellationToken,
+                    analysisMode,
+                    allowCloudProcessing);
+            });
         return Results.Ok(result);
     }
     catch (AnalysisProviderException exception)
     {
-        return Results.Json(new
-        {
-            error = "AI analysis unavailable – provider error.",
-            detail = exception.Message
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        return MapAnalysisFailure(exception);
     }
-}).AllowAnonymous();
+}).RequireRateLimiting("analysis")
+  .DisableAntiforgery()
+  .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(22 * 1024 * 1024));
 
-app.MapPost("/api/documents/analyse-text", async (AnalyseTextRequest request,
+analysisEndpoints.MapPost("/analyse-text", async (AnalyseTextRequest request,
     DocumentAnalysisService analysis,
+    AiProviderConfiguration aiConfiguration,
+    IEnumerable<IAiModelClient> aiClients,
+    CloudAiConsentService consent,
+    AiDailyUsageLimiter dailyUsage,
+    AnalysisResultCache resultCache,
+    HttpContext httpContext,
     CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(request.Text))
         return Results.BadRequest(new { error = "Use-case text is required." });
+    if (request.Text.Length > aiConfiguration.MaxInputCharacters)
+        return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+    if (request.UseCase?.Length > aiConfiguration.MaxUseCaseCharacters)
+        return Results.BadRequest(new { error = "Analysis context exceeds the configured length limit." });
+
+    var consentValid = consent.HasValidConsent(
+        httpContext,
+        request.CloudConsentScope,
+        request.CloudConsentPolicyVersion);
+    if (RequiresCloudConsent(aiConfiguration, aiClients, request.AnalysisMode) && !consentValid)
+        return MapAnalysisFailure(new AnalysisProviderException(
+            "Cloud analysis requires your explicit consent.",
+            failureCode: AnalysisFailureCode.CloudConsentRequired));
+    var allowCloudProcessing = !aiConfiguration.CloudConsentRequired || consentValid;
+    var title = string.IsNullOrWhiteSpace(request.Title)
+        ? "Use-case.txt"
+        : Path.GetFileName(request.Title);
     try
     {
-        var result = await analysis.AnalyseAsync(
-            string.IsNullOrWhiteSpace(request.Title) ? "Use-case.txt" : request.Title,
+        var result = await resultCache.GetOrCreateAsync(
+            GetAnalysisUserKey(httpContext),
+            title,
             request.Text,
             request.UseCase,
-            cancellationToken,
-            request.AnalysisMode);
+            request.AnalysisMode,
+            allowCloudProcessing,
+            async () =>
+            {
+                if (!dailyUsage.TryConsume(
+                    GetAnalysisUserKey(httpContext),
+                    aiConfiguration.DailyUsageLimit,
+                    DateOnly.FromDateTime(DateTime.UtcNow)))
+                {
+                    throw new AnalysisProviderException(
+                        "Daily analysis limit reached.",
+                        failureCode: AnalysisFailureCode.DailyLimitReached);
+                }
+
+                return await analysis.AnalyseAsync(
+                    title,
+                    request.Text,
+                    request.UseCase,
+                    cancellationToken,
+                    request.AnalysisMode,
+                    allowCloudProcessing);
+            });
         return Results.Ok(result);
     }
     catch (AnalysisProviderException exception)
     {
-        return Results.Json(new
-        {
-            error = "AI analysis unavailable – provider error.",
-            detail = exception.Message
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        return MapAnalysisFailure(exception);
     }
-}).AllowAnonymous();
+}).RequireRateLimiting("analysis")
+  .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(2 * 1024 * 1024));
 
 app.MapGet("/api/documents/{id}/source/{line}", (int id, int line) =>
     Results.Ok(new { documentId = id, line, sourceAvailable = true }));
@@ -119,16 +529,26 @@ app.MapGet("/api/documents/{id}/source/{line}", (int id, int line) =>
 app.MapPost("/api/documents/export/json", (DigestResult result) =>
     Results.Json(result));
 
-app.MapPost("/api/presentations/preview", async (HttpRequest request,
+var presentationPreviewEndpoint = app.MapPost("/api/presentations/preview", async (
+    HttpRequest request,
+    HttpContext httpContext,
     PresentationStudioService studio,
+    AiProviderConfiguration aiConfiguration,
+    IEnumerable<IAiModelClient> aiClients,
+    CloudAiConsentService consent,
+    AiDailyUsageLimiter dailyUsage,
     CancellationToken cancellationToken) =>
 {
+    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+    timeout.CancelAfter(TimeSpan.FromSeconds(aiConfiguration.RequestTimeoutSeconds));
     try
     {
+        PresentationRequest presentationRequest;
+        IFormFile? file;
         if (request.HasFormContentType)
         {
-            var form = await request.ReadFormAsync(cancellationToken);
-            var presentationRequest = new PresentationRequest
+            var form = await request.ReadFormAsync(timeout.Token);
+            presentationRequest = new PresentationRequest
             {
                 SourceType = form["sourceType"].ToString(),
                 SourceReference = form["sourceReference"].ToString(),
@@ -141,27 +561,72 @@ app.MapPost("/api/presentations/preview", async (HttpRequest request,
                 AspectRatio = form["aspectRatio"].ToString(),
                 IncludeSpeakerNotes = bool.TryParse(form["includeSpeakerNotes"], out var notes) && notes,
                 IncludeArchitectureDiagrams = bool.TryParse(form["includeArchitectureDiagrams"], out var diagrams) && diagrams,
-                IncludeScreenshots = bool.TryParse(form["includeScreenshots"], out var screenshots) && screenshots
+                IncludeScreenshots = bool.TryParse(form["includeScreenshots"], out var screenshots) && screenshots,
+                CloudConsentScope = form["cloudConsentScope"].ToString(),
+                CloudConsentPolicyVersion = form["cloudConsentPolicyVersion"].ToString()
             };
-            var result = await studio.PreviewAsync(presentationRequest, form.Files["file"], cancellationToken);
-            return Results.Ok(result);
+            file = form.Files["file"];
+        }
+        else
+        {
+            presentationRequest = await request.ReadFromJsonAsync<PresentationRequest>(timeout.Token)
+                ?? throw new AnalysisProviderException(
+                    "A presentation request is required.",
+                    failureCode: AnalysisFailureCode.InvalidInput);
+            file = null;
         }
 
-        var jsonRequest = await request.ReadFromJsonAsync<PresentationRequest>(cancellationToken);
-        if (jsonRequest is null)
-            return Results.BadRequest(new { error = "A presentation request is required." });
-        var jsonResult = await studio.PreviewAsync(jsonRequest, null, cancellationToken);
-        return Results.Ok(jsonResult);
+        var consentValid = consent.HasValidConsent(
+            httpContext,
+            presentationRequest.CloudConsentScope,
+            presentationRequest.CloudConsentPolicyVersion);
+        if (RequiresCloudConsent(aiConfiguration, aiClients, null) && !consentValid)
+            return MapAnalysisFailure(new AnalysisProviderException(
+                "Cloud analysis requires your explicit consent.",
+                failureCode: AnalysisFailureCode.CloudConsentRequired));
+        presentationRequest.AllowCloudProcessing =
+            !aiConfiguration.CloudConsentRequired || consentValid;
+        presentationRequest = PresentationStudioService.ValidateRequest(presentationRequest);
+        if (!dailyUsage.TryConsume(
+            GetAnalysisUserKey(httpContext),
+            aiConfiguration.DailyUsageLimit,
+            DateOnly.FromDateTime(DateTime.UtcNow)))
+        {
+            return MapAnalysisFailure(new AnalysisProviderException(
+                "Daily analysis limit reached.",
+                failureCode: AnalysisFailureCode.DailyLimitReached));
+        }
+
+        var result = await studio.PreviewAsync(presentationRequest, file, timeout.Token);
+        return Results.Ok(result);
     }
     catch (AnalysisProviderException exception)
     {
-        return Results.Json(new
-        {
-            error = "AI presentation unavailable – provider error.",
-            detail = exception.Message
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        return MapAnalysisFailure(exception);
     }
-}).AllowAnonymous().DisableAntiforgery();
+    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+    {
+        return MapAnalysisFailure(new AnalysisProviderException(
+            "The presentation request exceeded its configured timeout.",
+            failureCode: AnalysisFailureCode.RequestTimeout));
+    }
+}).RequireRateLimiting("analysis")
+  .DisableAntiforgery()
+  .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(22 * 1024 * 1024));
+if (entraConfigured)
+{
+    presentationPreviewEndpoint.RequireAuthorization();
+}
+else
+{
+    presentationPreviewEndpoint.AddEndpointFilter(async (context, next) =>
+    {
+        var remoteAddress = context.HttpContext.Connection.RemoteIpAddress;
+        if (remoteAddress is null || !IPAddress.IsLoopback(remoteAddress))
+            return Results.Unauthorized();
+        return await next(context);
+    });
+}
 
 app.MapPut("/api/presentations/{id:guid}", (Guid id,
     PresentationDocument presentation,
@@ -245,5 +710,114 @@ app.MapDelete("/api/presentations/{id:guid}", (Guid id,
     studio.Delete(id) ? Results.NoContent() : Results.NotFound()).AllowAnonymous();
 
 app.Run();
+
+static string GetAnalysisUserKey(HttpContext context)
+{
+    var identity = context.User.FindFirst("sub")?.Value ??
+                   context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ??
+                   context.Connection.RemoteIpAddress?.ToString() ??
+                   "unknown-client";
+    return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
+}
+
+static bool RequiresCloudConsent(
+    AiProviderConfiguration configuration,
+    IEnumerable<IAiModelClient> clients,
+    string? analysisMode)
+{
+    var mode = analysisMode?.Trim();
+    var supportedMode =
+        string.IsNullOrEmpty(mode) ||
+        mode.Equals("Configured", StringComparison.OrdinalIgnoreCase) ||
+        mode.Equals("Gemini", StringComparison.OrdinalIgnoreCase) ||
+        mode.Equals("Groq", StringComparison.OrdinalIgnoreCase) ||
+        mode.Equals("Deterministic", StringComparison.OrdinalIgnoreCase);
+    if (!configuration.CloudConsentRequired ||
+        !configuration.Enabled ||
+        !supportedMode ||
+        mode?.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) == true)
+    {
+        return false;
+    }
+
+    var requestedProvider = mode?.Equals("Gemini", StringComparison.OrdinalIgnoreCase) == true
+        ? "Gemini"
+        : mode?.Equals("Groq", StringComparison.OrdinalIgnoreCase) == true
+            ? "Groq"
+            : null;
+    return clients.Any(client =>
+        (requestedProvider is null ||
+         client.ProviderId.Equals(requestedProvider, StringComparison.OrdinalIgnoreCase)) &&
+        configuration.IsConfigured(client.ProviderId, client) &&
+        configuration.IsAllowedInFreeOnlyMode(client.ProviderId));
+}
+
+static string? MapAiErrorCategory(string? failureCode) => failureCode switch
+{
+    nameof(AnalysisFailureCode.NotConfigured) => "AI_CONFIGURATION_MISSING",
+    nameof(AnalysisFailureCode.ProviderAuthentication) => "AI_AUTHENTICATION_FAILED",
+    nameof(AnalysisFailureCode.ModelUnavailable) => "AI_MODEL_UNAVAILABLE",
+    nameof(AnalysisFailureCode.RateLimitExceeded) or
+        nameof(AnalysisFailureCode.DailyLimitReached) => "AI_RATE_LIMIT_EXCEEDED",
+    nameof(AnalysisFailureCode.RequestTimeout) => "AI_TIMEOUT",
+    nameof(AnalysisFailureCode.InvalidResponse) => "AI_INVALID_RESPONSE",
+    nameof(AnalysisFailureCode.ProviderUnavailable) => "AI_PROVIDER_UNAVAILABLE",
+    nameof(AnalysisFailureCode.Disabled) or
+        nameof(AnalysisFailureCode.NoFreeProvider) => "AI_PROVIDER_UNAVAILABLE",
+    nameof(AnalysisFailureCode.BudgetExceeded) => "AI_RATE_LIMIT_EXCEEDED",
+    _ => null
+};
+
+static bool IsSupportedDocument(string fileName) =>
+    Path.GetExtension(fileName).ToLowerInvariant() is
+        ".md" or ".markdown" or ".txt" or ".html" or ".htm" or ".json" or ".xml";
+
+static IResult MapAnalysisFailure(AnalysisProviderException exception)
+{
+    var (statusCode, code, message) = exception.FailureCode switch
+    {
+        AnalysisFailureCode.DailyLimitReached =>
+            (StatusCodes.Status429TooManyRequests, "AI_RATE_LIMIT_EXCEEDED", "Daily AI usage limit reached. Please try again later."),
+        AnalysisFailureCode.CloudConsentRequired =>
+            (StatusCodes.Status403Forbidden, "AI_CLOUD_CONSENT_REQUIRED", "Cloud analysis requires your explicit consent."),
+        AnalysisFailureCode.RequestTimeout =>
+            (StatusCodes.Status504GatewayTimeout, "AI_TIMEOUT", "Analysis request timed out. Please try again."),
+        AnalysisFailureCode.InvalidInput =>
+            (StatusCodes.Status400BadRequest, "AI_INVALID_INPUT", "The analysis request is invalid."),
+        AnalysisFailureCode.NoFreeProvider =>
+            (StatusCodes.Status503ServiceUnavailable, "AI_PROVIDER_UNAVAILABLE", "AI service is temporarily unavailable."),
+        AnalysisFailureCode.NotConfigured =>
+            (StatusCodes.Status503ServiceUnavailable, "AI_CONFIGURATION_MISSING", "AI service credentials are not configured on the server."),
+        AnalysisFailureCode.ProviderAuthentication =>
+            (StatusCodes.Status502BadGateway, "AI_AUTHENTICATION_FAILED", "AI provider authentication failed. Contact the administrator."),
+        AnalysisFailureCode.ModelUnavailable =>
+            (StatusCodes.Status503ServiceUnavailable, "AI_MODEL_UNAVAILABLE", "AI service is temporarily unavailable."),
+        AnalysisFailureCode.RateLimitExceeded =>
+            (StatusCodes.Status429TooManyRequests, "AI_RATE_LIMIT_EXCEEDED", "AI usage limit reached. Please try again later."),
+        AnalysisFailureCode.InvalidResponse =>
+            (StatusCodes.Status502BadGateway, "AI_PROVIDER_UNAVAILABLE", "AI service is temporarily unavailable."),
+        AnalysisFailureCode.BudgetExceeded =>
+            (StatusCodes.Status429TooManyRequests, "AI_REQUEST_BUDGET_EXCEEDED", "The AI request budget was reached. Please try again later."),
+        AnalysisFailureCode.Disabled =>
+            (StatusCodes.Status503ServiceUnavailable, "AI_PROVIDER_UNAVAILABLE", "AI service is temporarily unavailable."),
+        _ =>
+            (StatusCodes.Status503ServiceUnavailable, "AI_PROVIDER_UNAVAILABLE", "AI analysis is temporarily unavailable. Please try again.")
+    };
+
+    return Results.Json(new
+    {
+        success = false,
+        code,
+        error = message,
+        provider = "",
+        model = "",
+        analysis = (object?)null,
+        summary = "",
+        keyFindings = Array.Empty<object>(),
+        recommendations = Array.Empty<object>(),
+        warnings = Array.Empty<string>(),
+        processingTime = 0
+    }, statusCode: statusCode);
+}
 
 public partial class Program { }

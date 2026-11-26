@@ -4,7 +4,10 @@ public record AnalyseTextRequest(
     string Text,
     string? Title,
     string? UseCase,
-    string? AnalysisMode = null);
+    string? AnalysisMode = null,
+    bool AllowCloudProcessing = false,
+    string? CloudConsentScope = null,
+    string? CloudConsentPolicyVersion = null);
 
 public sealed class ParsedDocument
 {
@@ -79,11 +82,21 @@ public sealed class CompressedDocument
 
 public sealed class DigestResult
 {
+    public bool Success { get; init; } = true;
+    public string? Error { get; init; }
     public string DocumentTitle { get; init; } = "";
     public string DocumentType { get; init; } = "";
     public string AnalysisProvider { get; init; } = "";
     public AiModelInfo? ModelInfo { get; init; }
     public AiAnalysisReport? AiReport { get; init; }
+    public string Provider => ModelInfo?.Provider ?? AnalysisProvider;
+    public string Model => ModelInfo?.ModelName ?? "";
+    public AiAnalysisReport? Analysis => AiReport;
+    public string Summary => ExecutiveSummary;
+    public List<string> Warnings { get; init; } = [];
+    public double ProcessingTime => ModelInfo is null
+        ? 0
+        : Math.Max(0, (ModelInfo.AnalysisCompletedAt - ModelInfo.AnalysisStartedAt).TotalMilliseconds);
     public string ExecutiveSummary { get; init; } = "";
     public List<Finding> HighPriorityItems { get; init; } = [];
     public List<Finding> CriticalRisks { get; init; } = [];
@@ -113,9 +126,17 @@ public sealed class AiModelInfo
     public int InferenceCalls { get; init; }
     public int? InputTokens { get; init; }
     public int? OutputTokens { get; init; }
+    public List<AiProviderUsage> ProviderUsage { get; init; } = [];
     public string Status { get; init; } = "Completed";
     public string FindingOrigin { get; init; } = "AI generated; source evidence programmatically checked";
 }
+
+public sealed record AiProviderUsage(
+    string Provider,
+    string ModelName,
+    int InferenceCalls,
+    int? InputTokens,
+    int? OutputTokens);
 
 public sealed class AiAnalysisReport
 {

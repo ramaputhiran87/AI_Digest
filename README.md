@@ -1,6 +1,6 @@
 # AI Document Digest
 
-An evidence-backed document intelligence platform. The .NET 10 API uses a configured LLM as the primary analysis engine; deterministic rules are available only when explicitly selected as a fallback. Document parsing, line mapping, output schema validation, and source-evidence checks remain programmatic.
+An evidence-backed document intelligence platform. The .NET 10 API runs a prioritized AI provider chain, validates model output and source evidence, and keeps rules-based analysis as an explicitly selected mode.
 
 ## Architecture
 
@@ -8,11 +8,11 @@ An evidence-backed document intelligence platform. The .NET 10 API uses a config
 flowchart TD
     UI[Angular 22 dashboard] -->|Upload or text| API[.NET 10 Web API]
     API --> PARSE[Document extraction and line-preserving chunks]
-    PARSE --> ROUTER[Configured provider router]
-    ROUTER --> GEMINI[Google Gemini API]
-    ROUTER --> OLLAMA[Ollama local model / Qwen3]
+    PARSE --> ROUTER[Free-only provider router]
+    ROUTER --> GEMINI[Gemini free tier, explicitly confirmed]
+    ROUTER --> GROQ[Groq GPT-OSS 120B, paid model opt-in only]
     GEMINI --> UNDERSTAND[Document understanding inference]
-    OLLAMA --> UNDERSTAND
+    GROQ --> UNDERSTAND
     UNDERSTAND --> SPECIALISTS[Parallel security, architecture, compliance, business-impact and recommendation inference]
     SPECIALISTS --> CONSOLIDATE[LLM consolidation and executive report]
     CONSOLIDATE --> VERIFY[JSON schema and exact source quotation validation]
@@ -21,60 +21,38 @@ flowchart TD
     ROUTER -. Explicit request only .-> RULES[Rules-based fallback]
 ```
 
-The AI provider performs document understanding, each specialist analysis, consolidation, and report generation. Findings are model-generated; evidence quotations and line ranges are checked against extracted source lines before the API returns a successful response. This checks traceability, not whether a real system is exploitable or whether a human has verified the finding.
+The same selected provider performs document understanding, specialist analysis, consolidation, and report generation. Failures cause a bounded retry and then failover to the next eligible provider; results are not silently mixed across providers. Findings are model-generated; evidence quotations and line ranges are checked against extracted source lines before a successful response. This checks traceability, not whether a real system is exploitable or whether a human has verified the finding.
 
 ## Supported documents
 
-Markdown, plain text, HTML, JSON, and XML. The current API does not parse PDF. Large documents are split into overlapping source-line chunks, analyzed by the configured model, and consolidated. The default maximum is 40 chunks; it can be adjusted with `Analysis__MaxChunks`. Oversized documents fail explicitly rather than being silently truncated.
+Markdown, plain text, HTML, JSON, and XML. PDF parsing is not currently supported. The default maximum is 40 analysis chunks and 500,000 input characters; oversized documents fail instead of being silently truncated.
 
-## Configure a provider
+## AI providers, safety, and configuration
 
-Provider selection is controlled by backend configuration. The default is Gemini; there is no deterministic fallback if the selected provider is unavailable.
+Provider credentials are resolved from `GEMINI_API_KEY` / `GROQ_API_KEY`, `.NET` configuration sections (`Gemini:ApiKey` / `Groq:ApiKey`), .NET User Secrets, and the equivalent environment naming (`Gemini__ApiKey` / `Groq__ApiKey`). Empty and placeholder values are ignored. The local checkout currently has no provider key in environment variables, .NET User Secrets, appsettings, or the encrypted admin store, so live local inference remains unconfigured. No real `.env` file exists: ASP.NET Core does not load dotenv files automatically.
 
-### Google Gemini
+The API project now has a User Secrets ID. In Development, ASP.NET Core loads secrets such as `Gemini:ApiKey` automatically; ensure `ASPNETCORE_ENVIRONMENT=Development` is set when running locally. Production should use environment variables or a deployment secret manager. Deployment environment variables override appsettings, and standard configuration ordering is preserved. Never put real keys in appsettings, frontend code, or Git.
 
-Create a key in [Google AI Studio](https://aistudio.google.com/api-keys). Set it in the API process environment; do not put it in Angular settings or commit it to source control:
+Normal users do not need an administrator token or provider keys in the frontend. The dashboard displays read-only service status. Configure keys in the backend process environment, deployment secret manager, or .NET User Secrets; credentials are never sent to or stored by the Angular application. The optional protected admin API can still manage encrypted settings. With Azure AD configured, it requires the `Admin` role; otherwise it requires a strong backend `AI_ADMIN_TOKEN` and HTTPS for non-loopback connections. Set `AI_SETTINGS_PATH` and `AI_DATA_PROTECTION_KEYS_PATH` when deployment storage needs a different persistent location.
 
-```powershell
-$env:Analysis__Provider = "Gemini"
-$env:Gemini__Model = "gemini-2.5-flash"
-$env:Gemini__ApiKey = "your-Google-AI-Studio-key"
-Set-Location "Backend\AI.Digest.Api"
-dotnet run --urls http://localhost:5050
-```
+The configured order is Gemini first, Groq second. Free-only mode is enabled by default. Gemini is eligible only after explicitly confirming that the key belongs to a free-tier Google AI Studio project with billing disabled. The application cannot inspect account billing. Groq's requested `openai/gpt-oss-120b` model is priced, so it is blocked while free-only mode is on; it is not an eligible no-charge fallback. Do not disable free-only unless paid use is explicitly approved. No live provider connection is claimed without valid credentials.
 
-Change `Gemini__Model` to any model ID enabled for your Google AI Studio account. Gemini API quotas and free-tier terms may change. Cloud analysis sends document content to Google; do not upload sensitive material unless your organization's provider terms permit it.
-
-### Ollama / Qwen3
-
-Install Ollama, then pull a model supported by your machine. For example:
+Set credentials for local Development with .NET User Secrets (from `Backend\AI.Digest.Api`):
 
 ```powershell
-ollama pull qwen3:8b
-$env:Analysis__Provider = "Ollama"
-$env:Ollama__BaseUrl = "http://localhost:11434"
-$env:Ollama__Model = "qwen3:8b"
-Set-Location "Backend\AI.Digest.Api"
-dotnet run --urls http://localhost:5050
+dotnet user-secrets set "Gemini:ApiKey" "<your Gemini key>"
+dotnet user-secrets set "GEMINI_FREE_TIER_CONFIRMED" "true"
 ```
 
-The configured Ollama model is invoked through its `/api/chat` JSON endpoint. No cloud API key is required for local inference.
+The free-tier confirmation is a server-side safeguard; set it only after confirming that billing is disabled on the Google project. Use `GROQ_API_KEY` or `Groq:ApiKey` only if the configured model is eligible under the free-only policy. `.env.example` documents variable names but is not automatically loaded.
 
-### Analysis configuration
+Use the direct key pages: [Google AI Studio](https://aistudio.google.com/apikey) and [Groq Console](https://console.groq.com/keys). Only set the Gemini free-tier confirmation after verifying that billing is disabled on the Google project. Cloud analysis requires explicit one-time consent, stored encrypted on the backend and scoped to the user's account, policy version, and document-analysis/presentation use. Users can review or withdraw consent in Workspace settings. Without Azure AD, a persistent local browser-profile cookie scopes consent and analysis endpoints accept loopback requests only.
 
-Configuration can be supplied in `appsettings.json` or with .NET environment-variable overrides:
+`AI_PROVIDER_ORDER`, `GEMINI_ENABLED`, `GEMINI_MODEL`, `GROQ_ENABLED`, and `GROQ_MODEL` configure the provider chain. `AI_ENABLED`, `AI_FREE_ONLY`, and `AI_FALLBACK_ENABLED` control its behavior. Other controls include `AI_PROVIDER_TIMEOUT_SECONDS`, `AI_REQUEST_TIMEOUT_SECONDS`, `AI_RETRY_LIMIT`, `AI_MAX_INFERENCE_CALLS_PER_REQUEST`, `AI_DAILY_USAGE_LIMIT`, and `AI_FREE_TIER_ANALYSIS_MODE`. Detailed specialist analysis remains the default; optional free-tier mode combines compatible roles per document chunk while retaining evidence validation. Provider fallback occurs per inference, so completed specialist work is not repeated. Inference concurrency defaults to one. Environment model overrides must match the two supported IDs or that provider is disabled. The in-memory analysis cache is user-scoped and is not persisted to disk.
 
-| Setting | Default | Purpose |
-|---|---|---|
-| `Analysis__Provider` | `Gemini` | `Gemini` or `Ollama` |
-| `Analysis__ChunkCharacters` | `12000` | Approximate maximum chunk text size |
-| `Analysis__ChunkOverlapLines` | `5` | Source lines repeated between adjacent chunks |
-| `Analysis__MaxChunks` | `40` | Explicit safety limit; larger requests fail |
-| `Analysis__MaxParallelCalls` | `4` | Bounded concurrent specialist model requests |
-| `Analysis__MaxConsolidationFindings` | `250` | Candidate limit passed to final consolidation |
-| `Gemini__Model` | `gemini-2.5-flash` | Gemini model ID |
-| `Ollama__BaseUrl` | `http://localhost:11434` | Local Ollama URL |
-| `Ollama__Model` | `qwen3:8b` | Local model tag |
+At startup, configured providers receive a bounded metadata-only connection check; no inference is generated. `GET /api/ai/status` reports Online/Offline, active provider/model, fallback status, and the latest successful provider request without returning credentials. A metadata-only **Test connection** action is shown only to authenticated administrators. The protected **Test inference** API is not exposed in the normal user workflow and can consume provider quota.
+
+The API keeps the existing digest fields and adds the standardized `success`, `provider`, `model`, `analysis`, `summary`, `warnings`, `processingTime`, and `error` fields. Failed provider responses never include raw provider bodies or credentials. Analysis requests are limited to five per minute and ten uncached analyses per user/IP per UTC day by default.
 
 ## Presentation Studio
 
@@ -109,17 +87,21 @@ npm install
 npm start
 ```
 
-Open `http://localhost:4200`. The analysis screen defaults to the API-configured AI provider. A separate **Rules-based fallback** option is available and must be explicitly selected; its output is labeled as deterministic and is not LLM analysis. If AI analysis fails, the API returns HTTP 503 with `AI analysis unavailable – provider error.` and the UI allows retry.
+Open `http://localhost:4200`. The analysis screen defaults to the free-only provider chain. The first cloud analysis or presentation request opens a consent dialog; after consent is saved, subsequent requests reuse it until it is withdrawn or the policy scope changes. A **Rules-based fallback** option is available and must be explicitly selected; its output is not LLM analysis. Provider errors are converted to safe, actionable messages, and the UI allows retry.
 
 ## API testing
 
 ### Text analysis
+
+Cloud requests require consent already granted through the application or for the authenticated account. The API validates the saved consent record; request fields alone do not grant it.
 
 ```powershell
 $body = @{
     title = "sample-architecture.md"
     text = Get-Content "docs\sample-architecture.md" -Raw
     useCase = "Review security, architecture, compliance evidence, and business impact."
+    cloudConsentScope = "gemini-and-groq-cloud-document-analysis-and-presentation"
+    cloudConsentPolicyVersion = "1"
 } | ConvertTo-Json
 
 Invoke-RestMethod `
@@ -139,13 +121,13 @@ curl.exe -F "file=@docs/sample-architecture.md" `
 
 ### Verify real provider connectivity
 
-With Gemini credentials or a running Ollama model configured, call:
+The administrator page's **Test connection** checks Gemini's model metadata endpoint or Groq's model list; it does not generate text or incur inference charges. Actual AI analysis still requires a valid provider key and an eligible model. The real-inference smoke test below should only be used with an intentionally configured provider:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "scripts\Test-AiProvider.ps1"
 ```
 
-The script fails unless the response includes provider metadata and at least one actual model inference call. Live connectivity tests are kept separate from deterministic automated tests because they require provider credentials or a local model and network/model availability.
+The script fails unless the response includes provider metadata and an actual model inference call. Live inference was not tested in this environment because both provider keys are missing. Groq's requested model is priced and is blocked while free-only mode is enabled; never disable free-only unless paid usage is explicitly approved.
 
 ### Explicit rules fallback
 
@@ -160,12 +142,13 @@ $testOutput = Join-Path $env:TEMP "AI-Digest-TestOutput"
 dotnet test "Backend\AI.Digest.Api.Tests\AI.Digest.Api.Tests.csproj" "-p:OutDir=$testOutput\"
 ```
 
-The integration tests use a mock `IAiModelClient` to verify that the document-understanding stage, five specialist tasks, and consolidation are actually called; they also reject unsupported quotations. Optional live Gemini/Ollama connectivity test methods are skipped by the default suite. Use the connectivity script above for a configured real provider.
+The integration tests use a mock `IAiModelClient` to verify that the document-understanding stage, five specialist tasks, and consolidation are actually called; they also reject unsupported quotations. Optional live-provider connectivity tests are skipped by the default suite. Use the connectivity script above for a configured real provider.
 
 ## Report fields
 
-Successful AI responses include:
+Successful AI responses keep the existing digest fields and also expose:
 
+- `success`, `provider`, `model`, `analysis`, `summary`, `keyFindings`, `recommendations`, `warnings`, `processingTime`, and `error` in a common response envelope.
 - `aiReport`: document understanding, security/architecture/compliance assessments, business impact, detailed findings, priority actions, and overall assessment.
 - `modelInfo`: provider/model/version, start and completion times, inference-call count, token usage when returned by the provider, status, and a statement that findings are AI-generated while evidence is programmatically checked.
 - Legacy finding arrays and export fields for compatibility with the existing UI/history formats.

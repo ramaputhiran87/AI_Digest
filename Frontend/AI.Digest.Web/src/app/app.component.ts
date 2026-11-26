@@ -163,7 +163,7 @@ type NavigationTab = 'Dashboard' | 'Document Analysis' | 'Presentation Studio' |
 type TrendPeriod = 'daily' | 'weekly' | 'monthly';
 type HistorySort = 'date' | 'name' | 'risk';
 type HistoryStatusFilter = 'All' | AnalysisStatus;
-type AnalysisMode = 'Configured' | 'Deterministic';
+type AnalysisMode = 'Configured' | 'Gemini' | 'Groq' | 'Deterministic';
 
 interface PresentationSlide {
   slideNumber: number;
@@ -218,6 +218,27 @@ const MAX_HISTORY_ENTRIES = 20;
 const SUPPORTED_EXTENSIONS = ['.md', '.txt', '.html', '.htm', '.json', '.xml'];
 const NAV_ITEMS: NavigationTab[] = ['Dashboard', 'Document Analysis', 'Presentation Studio', 'Analytics', 'History'];
 
+interface AiServiceStatus {
+  serviceStatus: 'Online' | 'Offline';
+  activeProvider: string | null;
+  activeProviderName: string | null;
+  activeModel: string | null;
+  connectionStatus: string;
+  fallbackProviderStatus: string;
+  lastSuccessfulRequest: { provider: string; occurredAt: string } | null;
+  canTestConnection: boolean;
+  requiresExplicitCloudConsent?: boolean;
+  providers?: { inferenceAllowed: boolean }[];
+}
+
+interface CloudAiConsentStatus {
+  isConsented: boolean;
+  grantedAt: string | null;
+  scope: string;
+  policyVersion: string;
+  withdrawnAt: string | null;
+}
+
 @Component({
   selector: 'app-root',
   standalone: true,
@@ -262,6 +283,7 @@ const NAV_ITEMS: NavigationTab[] = ['Dashboard', 'Document Analysis', 'Presentat
 })
 export class AppComponent {
   private readonly http = inject(HttpClient);
+  private readonly apiBaseUrl = `http://${globalThis.location.hostname}:5050`;
   readonly navItems = NAV_ITEMS;
   readonly Math = Math;
   readonly activeTab = signal<NavigationTab>('Dashboard');
@@ -303,6 +325,17 @@ export class AppComponent {
   readonly presentation = signal<PresentationDocument | null>(null);
   readonly presentationPreviewIndex = signal(0);
   readonly presentationHistory = signal<PresentationDocument[]>([]);
+  readonly aiServiceStatus = signal<AiServiceStatus | null>(null);
+  readonly aiServiceStatusLoading = signal(true);
+  readonly aiServiceStatusError = signal('');
+  readonly aiConnectionTestStatus = signal('');
+  readonly cloudConsentStatus = signal<CloudAiConsentStatus | null>(null);
+  readonly cloudConsentLoading = signal(true);
+  readonly cloudConsentSaving = signal(false);
+  readonly cloudConsentDialogOpen = signal(false);
+  readonly cloudConsentChecked = signal(false);
+  readonly cloudConsentError = signal('');
+  private pendingCloudConsentAction: (() => void) | null = null;
 
   readonly findings = computed(() => {
     const data = this.result();
@@ -590,13 +623,187 @@ export class AppComponent {
 
   constructor() {
     this.loadHistory();
+    this.refreshAiStatus();
+    this.refreshCloudConsent();
   }
 
   setTab(tab: NavigationTab) {
     this.activeTab.set(tab);
     if (tab === 'Presentation Studio') this.loadPresentationHistory();
+    if (tab === 'Dashboard') this.refreshAiStatus();
     this.notificationsOpen.set(false);
     this.settingsOpen.set(false);
+  }
+
+  refreshAiStatus() {
+    this.aiServiceStatusLoading.set(true);
+    this.aiServiceStatusError.set('');
+    this.http.get<AiServiceStatus>(`${this.apiBaseUrl}/api/ai/status`).subscribe({
+      next: status => {
+        this.aiServiceStatus.set(status);
+        this.aiServiceStatusLoading.set(false);
+      },
+      error: () => {
+        this.aiServiceStatus.set(null);
+        this.aiServiceStatusError.set('AI service status is currently unavailable.');
+        this.aiServiceStatusLoading.set(false);
+      }
+    });
+  }
+
+  refreshCloudConsent() {
+    this.cloudConsentLoading.set(true);
+    this.http.get<CloudAiConsentStatus>(
+      `${this.apiBaseUrl}/api/consent/cloud-ai/`,
+      { withCredentials: true }
+    ).subscribe({
+      next: status => {
+        this.cloudConsentStatus.set(status);
+        this.cloudConsentLoading.set(false);
+        this.resumePendingCloudAction();
+      },
+      error: () => {
+        this.cloudConsentStatus.set(null);
+        this.cloudConsentLoading.set(false);
+        this.resumePendingCloudAction();
+      }
+    });
+  }
+
+  reviewCloudConsent() {
+    this.pendingCloudConsentAction = null;
+    this.cloudConsentChecked.set(false);
+    this.cloudConsentError.set('');
+    this.cloudConsentDialogOpen.set(true);
+  }
+
+  cancelCloudConsent() {
+    this.pendingCloudConsentAction = null;
+    this.cloudConsentDialogOpen.set(false);
+    this.cloudConsentChecked.set(false);
+    this.cloudConsentError.set('');
+  }
+
+  grantCloudConsent() {
+    if (!this.cloudConsentChecked() || this.cloudConsentSaving()) return;
+
+    const current = this.cloudConsentStatus();
+    const expectedScope = current?.scope ?? 'gemini-and-groq-cloud-document-analysis-and-presentation';
+    const expectedPolicyVersion = current?.policyVersion ?? '1';
+    this.cloudConsentSaving.set(true);
+    this.cloudConsentError.set('');
+    this.http.post<CloudAiConsentStatus>(
+      `${this.apiBaseUrl}/api/consent/cloud-ai/`,
+      {
+        consented: true,
+        scope: expectedScope,
+        policyVersion: expectedPolicyVersion
+      },
+      { withCredentials: true }
+    ).subscribe({
+      next: status => {
+        if (!status?.isConsented ||
+            status.scope !== expectedScope ||
+            status.policyVersion !== expectedPolicyVersion ||
+            status.withdrawnAt) {
+          this.cloudConsentSaving.set(false);
+          this.cloudConsentError.set('The server did not confirm this consent. Please try again.');
+          return;
+        }
+        this.cloudConsentStatus.set(status);
+        this.cloudConsentSaving.set(false);
+        this.cloudConsentDialogOpen.set(false);
+        this.cloudConsentChecked.set(false);
+        this.cloudConsentError.set('');
+        this.resumePendingCloudAction();
+      },
+      error: error => {
+        this.cloudConsentSaving.set(false);
+        this.cloudConsentError.set(error.status === 0
+          ? 'Could not reach the consent service. Check the backend connection and try again.'
+          : error.status === 401
+            ? 'Your session is not authorized. Sign in again and retry.'
+            : error.status === 403
+              ? 'This session is not authorized to save consent.'
+              : error.status === 404
+                ? 'The consent service endpoint is unavailable. Restart the backend and retry.'
+                : error.status === 429
+                  ? 'Too many consent requests. Please wait and try again.'
+                  : error.status === 503
+                    ? 'Consent could not be stored on the server. Please try again later.'
+                    : error.status === 400
+                      ? 'The consent policy changed. Refresh the application and review it again.'
+                      : 'Consent could not be saved. Please try again.');
+      }
+    });
+  }
+
+  withdrawCloudConsent() {
+    this.http.delete<CloudAiConsentStatus>(
+      `${this.apiBaseUrl}/api/consent/cloud-ai/`,
+      { withCredentials: true }
+    ).subscribe({
+      next: status => this.cloudConsentStatus.set(status),
+      error: () => this.cloudConsentError.set('Consent could not be withdrawn. Please try again.')
+    });
+  }
+
+  private requireCloudConsent(action: () => void): boolean {
+    if (this.analysisMode() === 'Deterministic') return true;
+
+    const serviceStatus = this.aiServiceStatus();
+    const hasConfiguredProvider = serviceStatus?.providers
+      ? serviceStatus.providers.some(provider => provider.inferenceAllowed)
+      : true;
+    if (serviceStatus?.requiresExplicitCloudConsent === false || !hasConfiguredProvider)
+      return true;
+    if (this.cloudConsentLoading()) {
+      this.pendingCloudConsentAction = action;
+      return false;
+    }
+    if (this.cloudConsentStatus()?.isConsented) return true;
+
+    this.pendingCloudConsentAction = action;
+    this.cloudConsentChecked.set(false);
+    this.cloudConsentError.set('');
+    this.cloudConsentDialogOpen.set(true);
+    return false;
+  }
+
+  private resumePendingCloudAction() {
+    const action = this.pendingCloudConsentAction;
+    if (!action || this.cloudConsentLoading()) return;
+    this.pendingCloudConsentAction = null;
+    if (this.cloudConsentStatus()?.isConsented) {
+      action();
+      return;
+    }
+    this.cloudConsentChecked.set(false);
+    this.cloudConsentDialogOpen.set(true);
+  }
+
+  testAiConnection() {
+    const status = this.aiServiceStatus();
+    const providerId = status?.activeProvider?.toLowerCase();
+    if (!status?.canTestConnection || (providerId !== 'gemini' && providerId !== 'groq'))
+      return;
+
+    this.aiConnectionTestStatus.set('');
+    this.http.post<{ status: string }>(
+      `${this.apiBaseUrl}/api/admin/ai/providers/${providerId}/test`,
+      {}
+    ).subscribe({
+      next: result => {
+        this.aiConnectionTestStatus.set(result.status);
+        this.refreshAiStatus();
+      },
+      error: () => {
+        this.aiConnectionTestStatus.set(
+          'Connection test failed. Check administrator authorization and backend status.'
+        );
+        this.refreshAiStatus();
+      }
+    });
   }
 
   selectTrendPeriod(period: TrendPeriod) {
@@ -636,6 +843,7 @@ export class AppComponent {
     const file = this.selectedFile();
     const text = this.useCase().trim();
     if ((!file && !text) || this.loading()) return;
+    if (!this.requireCloudConsent(() => this.analyse())) return;
 
     this.loading.set(true);
     this.apiError.set('');
@@ -643,11 +851,17 @@ export class AppComponent {
       const form = new FormData();
       form.append('file', file);
       form.append('useCase', this.useCase());
-      if (this.analysisMode() === 'Deterministic') {
-        form.append('analysisMode', 'Deterministic');
+      form.append('cloudConsentScope', this.cloudConsentStatus()?.scope ?? '');
+      form.append('cloudConsentPolicyVersion', this.cloudConsentStatus()?.policyVersion ?? '');
+      if (this.analysisMode() !== 'Configured') {
+        form.append('analysisMode', this.analysisMode());
       }
       this.sendAnalysis(
-        this.http.post<DigestResult>('http://127.0.0.1:5050/api/documents/analyse', form),
+        this.http.post<DigestResult>(
+          `${this.apiBaseUrl}/api/documents/analyse`,
+          form,
+          { withCredentials: true }
+        ),
         file.name,
         this.documentType(file.name),
         file.size
@@ -656,12 +870,18 @@ export class AppComponent {
     }
 
     this.sendAnalysis(
-      this.http.post<DigestResult>('http://127.0.0.1:5050/api/documents/analyse-text', {
-        text,
-        title: 'Use-case.txt',
-        useCase: this.useCase(),
-        analysisMode: this.analysisMode() === 'Deterministic' ? 'Deterministic' : null
-      }),
+      this.http.post<DigestResult>(
+        `${this.apiBaseUrl}/api/documents/analyse-text`,
+        {
+          text,
+          title: 'Use-case.txt',
+          useCase: this.useCase(),
+          cloudConsentScope: this.cloudConsentStatus()?.scope ?? '',
+          cloudConsentPolicyVersion: this.cloudConsentStatus()?.policyVersion ?? '',
+          analysisMode: this.analysisMode() === 'Configured' ? null : this.analysisMode()
+        },
+        { withCredentials: true }
+      ),
       'Use-case.txt',
       'Plain Text',
       new Blob([text]).size
@@ -727,6 +947,8 @@ export class AppComponent {
   }
 
   async generatePresentation() {
+    if (!this.requireCloudConsent(() => { void this.generatePresentation(); })) return;
+
     this.presentationLoading.set(true);
     this.presentationError.set('');
     try {
@@ -743,15 +965,27 @@ export class AppComponent {
       form.append('includeSpeakerNotes', String(this.includeSpeakerNotes()));
       form.append('includeArchitectureDiagrams', String(this.includeArchitectureDiagrams()));
       form.append('includeScreenshots', String(this.includeScreenshots()));
+      form.append('cloudConsentScope', this.cloudConsentStatus()?.scope ?? '');
+      form.append('cloudConsentPolicyVersion', this.cloudConsentStatus()?.policyVersion ?? '');
       if (this.presentationFile()) form.append('file', this.presentationFile()!);
       const result = await this.http.post<PresentationDocument>(
-        'http://127.0.0.1:5050/api/presentations/preview', form).toPromise();
+        `${this.apiBaseUrl}/api/presentations/preview`,
+        form,
+        { withCredentials: true }
+      ).toPromise();
       if (!result) throw new Error('The presentation service returned no result.');
       this.presentation.set(result);
       this.presentationPreviewIndex.set(0);
       await this.loadPresentationHistory();
     } catch (error: unknown) {
-      const httpError = error as { status?: number; error?: { error?: string; detail?: string } };
+      const httpError = error as { status?: number; error?: { code?: string; error?: string; detail?: string } };
+      if (httpError.error?.code === 'AI_CLOUD_CONSENT_REQUIRED') {
+        this.presentationError.set('');
+        this.pendingCloudConsentAction = () => { void this.generatePresentation(); };
+        this.cloudConsentChecked.set(false);
+        this.cloudConsentDialogOpen.set(true);
+        return;
+      }
       this.presentationError.set(httpError.error?.error
         ? `${httpError.error.error}${httpError.error.detail ? ` ${httpError.error.detail}` : ''}`
         : `Presentation generation failed${httpError.status ? ` (${httpError.status})` : ''}.`);
@@ -763,7 +997,7 @@ export class AppComponent {
   async loadPresentationHistory() {
     try {
       const history = await this.http.get<PresentationDocument[]>(
-        'http://127.0.0.1:5050/api/presentations').toPromise();
+        `${this.apiBaseUrl}/api/presentations`).toPromise();
       this.presentationHistory.set(history ?? []);
     } catch {
       this.presentationHistory.set([]);
@@ -789,11 +1023,11 @@ export class AppComponent {
   }
 
   downloadPresentationPptx(presentation: PresentationDocument) {
-    window.open(`http://127.0.0.1:5050/api/presentations/${presentation.id}/pptx`, '_blank');
+    window.open(`${this.apiBaseUrl}/api/presentations/${presentation.id}/pptx`, '_blank');
   }
 
   downloadPresentationPdf(presentation: PresentationDocument) {
-    window.open(`http://127.0.0.1:5050/api/presentations/${presentation.id}/pdf`, '_blank');
+    window.open(`${this.apiBaseUrl}/api/presentations/${presentation.id}/pdf`, '_blank');
   }
 
   openPresentation(presentation: PresentationDocument) {
@@ -802,7 +1036,7 @@ export class AppComponent {
   }
 
   async deletePresentation(presentation: PresentationDocument) {
-    await this.http.delete(`http://127.0.0.1:5050/api/presentations/${presentation.id}`).toPromise();
+    await this.http.delete(`${this.apiBaseUrl}/api/presentations/${presentation.id}`).toPromise();
     await this.loadPresentationHistory();
   }
 
@@ -904,14 +1138,30 @@ export class AppComponent {
     request.subscribe({
       next: value => this.setResult(value, title, type, size),
       error: error => {
-        const payload = error?.error as { error?: unknown; detail?: unknown } | undefined;
-        const providerMessage = typeof payload?.error === 'string' ? payload.error : '';
-        const providerDetail = typeof payload?.detail === 'string' ? payload.detail : '';
-        const message = providerMessage
-          ? `${providerMessage}${providerDetail ? ` ${providerDetail}` : ''}`
-          : error.status
-            ? `Analysis failed (${error.status}). Check that the API is running on port 5050.`
-            : 'Analysis API is unavailable.';
+        const payload = error?.error as { code?: unknown; error?: unknown } | undefined;
+        if (payload?.code === 'AI_CLOUD_CONSENT_REQUIRED') {
+          this.loading.set(false);
+          this.pendingCloudConsentAction = () => this.analyse();
+          this.cloudConsentChecked.set(false);
+          this.cloudConsentDialogOpen.set(true);
+          return;
+        }
+        const apiMessage = typeof payload?.error === 'string' ? payload.error : '';
+        const message = apiMessage || (error.status === 0
+          ? 'Analysis API is unreachable. Start the API and try again.'
+          : error.status === 401
+            ? 'Sign in is required to analyze documents.'
+            : error.status === 403
+              ? 'Cloud processing needs your consent.'
+              : error.status === 413
+                ? 'The document exceeds the configured analysis size limit.'
+                : error.status === 429
+                  ? 'Daily AI usage limit reached. Please try again later.'
+                  : error.status === 504
+                    ? 'Analysis request timed out. Please try again.'
+                    : error.status === 503
+                      ? 'AI analysis is temporarily unavailable. Please try again.'
+                      : `Analysis failed (${error.status || 'unknown error'}).`);
         this.apiError.set(message);
         this.recordFailure(title, type, size, message);
         this.loading.set(false);

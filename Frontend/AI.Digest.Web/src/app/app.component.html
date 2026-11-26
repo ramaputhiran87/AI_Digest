@@ -49,6 +49,20 @@
           <div class="popover-heading"><strong>Workspace settings</strong><button class="icon-button small-icon" aria-label="Close settings" (click)="toggleSettings()"><svg lucideX></svg></button></div>
           <p>Analysis history is stored in this browser on this device.</p>
           <p>Documents are sent to the configured AI provider. Check your provider terms before uploading sensitive material.</p>
+          <div class="consent-settings">
+            <p><strong>Cloud AI consent:</strong> {{ cloudConsentLoading() ? 'Checking…' : cloudConsentStatus()?.isConsented ? 'Granted' : 'Not granted' }}</p>
+            @if (cloudConsentStatus()?.isConsented && cloudConsentStatus()?.grantedAt) {
+              <small>Granted {{ cloudConsentStatus()?.grantedAt | date:'medium' }}</small>
+              <small>Scope: {{ cloudConsentStatus()?.scope }} · policy version {{ cloudConsentStatus()?.policyVersion }}</small>
+            }
+            <div class="consent-settings-actions">
+              <button class="text-action" (click)="reviewCloudConsent()">Review consent</button>
+              @if (cloudConsentStatus()?.isConsented) {
+                <button class="text-action danger-text" (click)="withdrawCloudConsent()">Withdraw consent</button>
+              }
+            </div>
+            @if (cloudConsentError()) { <small class="consent-error">{{ cloudConsentError() }}</small> }
+          </div>
           <button class="text-action" (click)="setTab('Analytics')">View analytics</button>
         </section>
       }
@@ -76,6 +90,43 @@
       <button class="button button-primary" (click)="setTab('Document Analysis')">
         <svg lucideUpload></svg> New analysis <svg class="button-arrow" lucideArrowUpRight></svg>
       </button>
+    </section>
+
+    <section class="panel ai-service-panel" aria-label="AI service status" aria-live="polite">
+      <div class="ai-service-heading">
+        <div>
+          <div class="eyebrow"><span class="eyebrow-dot"></span> SERVICE STATUS</div>
+          <h2>AI service</h2>
+        </div>
+        <div class="ai-service-actions">
+          <span class="ai-service-indicator"
+            [class.online]="aiServiceStatus()?.serviceStatus === 'Online'">
+            {{ aiServiceStatusLoading() ? 'Checking' : aiServiceStatus()?.serviceStatus ?? 'Offline' }}
+          </span>
+          <button class="button button-secondary" type="button" (click)="refreshAiStatus()">Refresh</button>
+          @if (aiServiceStatus()?.canTestConnection) {
+            <button class="button button-secondary" type="button"
+              [disabled]="!aiServiceStatus()?.activeProvider" (click)="testAiConnection()">Test connection</button>
+          }
+        </div>
+      </div>
+      <div class="ai-service-status-grid">
+        <div><span>Active provider</span><strong>{{ aiServiceStatus()?.activeProviderName ?? 'None' }}</strong></div>
+        <div><span>Active model</span><strong>{{ aiServiceStatus()?.activeModel ?? '—' }}</strong></div>
+        <div><span>Connection status</span><strong>{{ aiServiceStatus()?.connectionStatus ?? aiServiceStatusError() }}</strong></div>
+        <div><span>Fallback provider status</span><strong>{{ aiServiceStatus()?.fallbackProviderStatus ?? '—' }}</strong></div>
+        <div>
+          <span>Last successful request</span>
+          @if (aiServiceStatus()?.lastSuccessfulRequest; as lastRequest) {
+            <strong>{{ lastRequest.provider }} · {{ lastRequest.occurredAt | date:'medium' }}</strong>
+          } @else {
+            <strong>Not available yet</strong>
+          }
+        </div>
+      </div>
+      @if (aiConnectionTestStatus()) {
+        <p class="ai-connection-result" role="status">{{ aiConnectionTestStatus() }}</p>
+      }
     </section>
 
     <section class="kpi-grid" aria-label="Analysis overview">
@@ -190,16 +241,20 @@
       <div class="analysis-mode-row">
         <label for="analysis-mode">Analysis mode</label>
         <select id="analysis-mode" [ngModel]="analysisMode()" (ngModelChange)="analysisMode.set($event)">
-          <option value="Configured">AI provider configured by the API</option>
+          <option value="Configured">Gemini primary, Groq fallback</option>
+          <option value="Gemini">Google Gemini (free-tier confirmation required)</option>
+          <option value="Groq">Groq Cloud (priced model; blocked in free-only mode)</option>
           <option value="Deterministic">Rules-based fallback (explicitly selected)</option>
         </select>
-        <span>{{ analysisMode() === 'Deterministic' ? 'This fallback is not LLM analysis.' : 'AI provider failures are reported; no silent fallback is performed.' }}</span>
+        <span>{{ analysisMode() === 'Deterministic'
+          ? 'This fallback is not LLM analysis.'
+          : 'Cloud analysis requests require your one-time consent before content is sent to a configured provider.' }}</span>
       </div>
       @if (loading()) {
         <div class="analysis-progress" role="status"><span class="progress-track"><i></i></span><span>Analyzing document and validating source evidence…</span></div>
       }
       <div class="upload-footer">
-        <span class="upload-privacy"><svg lucideShieldCheck></svg> Your document is processed by the configured analysis provider.</span>
+        <span class="upload-privacy"><svg lucideShieldCheck></svg> Cloud providers are used only after your consent.</span>
         <button class="button button-primary analyze-button" [disabled]="loading() || (!selectedFile() && !useCase().trim())" (click)="analyse()">
           @if (loading()) { <span class="button-spinner"></span> Analyzing… } @else { <svg lucideSparkles></svg> Analyze document }
         </button>
@@ -394,7 +449,7 @@
           <div class="presentation-switches"><label><input type="checkbox" [ngModel]="includeSpeakerNotes()" (ngModelChange)="includeSpeakerNotes.set($event)"> Speaker notes</label><label><input type="checkbox" [ngModel]="includeArchitectureDiagrams()" (ngModelChange)="includeArchitectureDiagrams.set($event)"> Architecture diagrams</label><label><input type="checkbox" [ngModel]="includeScreenshots()" (ngModelChange)="includeScreenshots.set($event)"> Application screenshots</label></div>
         </div>
       </div>
-      <div class="upload-footer"><span class="upload-privacy"><svg lucideShieldCheck></svg> Source content is sent only to the configured AI provider.</span><button class="button button-primary analyze-button" [disabled]="presentationLoading()" (click)="generatePresentation()">@if (presentationLoading()) { <span class="button-spinner"></span> Generating… } @else { <svg lucideSparkles></svg> Generate presentation }</button></div>
+      <div class="upload-footer"><span class="upload-privacy"><svg lucideShieldCheck></svg> Source content is sent only after you grant cloud AI consent.</span><button class="button button-primary analyze-button" [disabled]="presentationLoading()" (click)="generatePresentation()">@if (presentationLoading()) { <span class="button-spinner"></span> Generating… } @else { <svg lucideSparkles></svg> Generate presentation }</button></div>
     </section>
 
     @if (presentation(); as deck) {
@@ -471,4 +526,29 @@
     </section>
     <p class="history-storage-note"><svg lucideShieldCheck></svg> History is stored locally in this browser and is limited to the 20 most recent analyses.</p>
   }
+
 </main>
+
+@if (cloudConsentDialogOpen()) {
+  <div class="consent-backdrop" (click)="cancelCloudConsent()">
+    <section class="consent-dialog" role="dialog" aria-modal="true" aria-labelledby="cloud-consent-title"
+      (click)="$event.stopPropagation()">
+      <div class="consent-dialog-heading">
+        <span class="consent-icon"><svg lucideShieldCheck></svg></span>
+        <div><h2 id="cloud-consent-title">Cloud AI Analysis</h2><p>One-time consent for cloud analysis</p></div>
+      </div>
+      <p class="consent-dialog-message">This application uses Google Gemini and, when configured, Groq Cloud to analyse your submitted content and generate reports and presentations. Your submitted content may be processed by these providers' cloud AI services. Do not submit confidential or sensitive information unless you are authorized to do so.</p>
+      <label class="consent-dialog-checkbox">
+        <input type="checkbox" [ngModel]="cloudConsentChecked()" (ngModelChange)="cloudConsentChecked.set($event)">
+        <span>I consent to processing my submitted content using the cloud AI provider for document analysis and presentation generation.</span>
+      </label>
+      @if (cloudConsentError()) { <p class="consent-error" role="alert">{{ cloudConsentError() }}</p> }
+      <div class="consent-dialog-actions">
+        <button class="button button-secondary" [disabled]="cloudConsentSaving()" (click)="cancelCloudConsent()">Cancel</button>
+        <button class="button button-primary" [disabled]="!cloudConsentChecked() || cloudConsentSaving()" (click)="grantCloudConsent()">
+          {{ cloudConsentSaving() ? 'Saving…' : 'Agree and Continue' }}
+        </button>
+      </div>
+    </section>
+  </div>
+}

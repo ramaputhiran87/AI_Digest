@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace AI.Digest.Api.Models;
 
 public sealed class PresentationRequest
@@ -14,6 +16,10 @@ public sealed class PresentationRequest
     public bool IncludeSpeakerNotes { get; init; } = true;
     public bool IncludeArchitectureDiagrams { get; init; } = true;
     public bool IncludeScreenshots { get; init; } = true;
+    public string? CloudConsentScope { get; init; }
+    public string? CloudConsentPolicyVersion { get; init; }
+    [JsonIgnore]
+    public bool AllowCloudProcessing { get; set; }
 }
 
 public sealed class PresentationSource
