@@ -6,6 +6,64 @@ using Xunit;
 
 namespace AI.Digest.Api.Tests;
 
+public sealed class PresentationExportTests
+{
+    [Fact]
+    public void GeneratesEditablePptxAndConsistentPdf()
+    {
+        var presentation = new PresentationDocument
+        {
+            Id = Guid.NewGuid(),
+            Title = "AI Digest Architecture",
+            Description = "Enterprise document intelligence overview",
+            SourceType = "UseCase",
+            TargetAudience = "Engineering leaders",
+            Theme = "AI_Digest Navy Blue",
+            AspectRatio = "16:9",
+            TotalSlides = 2,
+            AIProvider = "Test Provider",
+            AIModel = "Test Model",
+            Status = "Completed",
+            Slides =
+            [
+                new PresentationSlide
+                {
+                    SlideNumber = 1,
+                    Title = "AI Digest",
+                    Subtitle = "Enterprise document intelligence",
+                    LayoutType = "Title",
+                    Content = ["Angular", ".NET 10", "Gemini or Ollama"],
+                    SpeakerNotes = "Introduce the platform.",
+                    SourceReferences = ["Use-case description"]
+                },
+                new PresentationSlide
+                {
+                    SlideNumber = 2,
+                    Title = "Intelligent workflow",
+                    LayoutType = "Workflow",
+                    Content = ["Document extraction", "LLM understanding", "Evidence validation", "Presentation export"],
+                    SpeakerNotes = "Explain the end-to-end workflow.",
+                    Diagram = new PresentationDiagram
+                    {
+                        Type = "Workflow",
+                        Mermaid = "flowchart TD\n A[Document] --> B[LLM] --> C[Slides]"
+                    }
+                }
+            ]
+        };
+
+        var generator = new PresentationGenerationService();
+        var pptx = generator.GeneratePptx(presentation);
+        var pdf = generator.GeneratePdf(presentation);
+
+        Assert.True(pptx.Length > 1000);
+        Assert.True(pdf.Length > 1000);
+        Assert.Equal((byte)'P', pptx[0]);
+        Assert.Equal((byte)'K', pptx[1]);
+        Assert.Equal((byte)'%', pdf[0]);
+    }
+}
+
 public sealed class AiAnalysisPipelineTests
 {
     private const string Source = """

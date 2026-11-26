@@ -34,6 +34,11 @@ builder.Services.AddScoped<IAiModelClient>(services =>
 builder.Services.AddScoped<LlmAnalysisProvider>();
 builder.Services.AddScoped<IAnalysisProvider, AnalysisProviderRouter>();
 builder.Services.AddScoped<DocumentAnalysisService>();
+builder.Services.AddHttpClient<PresentationSourceProviders>(client =>
+    client.Timeout = TimeSpan.FromSeconds(45));
+builder.Services.AddScoped<PresentationPlanningService>();
+builder.Services.AddScoped<PresentationGenerationService>();
+builder.Services.AddSingleton<PresentationStudioService>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
 
@@ -113,6 +118,131 @@ app.MapGet("/api/documents/{id}/source/{line}", (int id, int line) =>
 
 app.MapPost("/api/documents/export/json", (DigestResult result) =>
     Results.Json(result));
+
+app.MapPost("/api/presentations/preview", async (HttpRequest request,
+    PresentationStudioService studio,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        if (request.HasFormContentType)
+        {
+            var form = await request.ReadFormAsync(cancellationToken);
+            var presentationRequest = new PresentationRequest
+            {
+                SourceType = form["sourceType"].ToString(),
+                SourceReference = form["sourceReference"].ToString(),
+                UseCase = form["useCase"].ToString(),
+                Title = form["title"].ToString(),
+                TargetAudience = form["targetAudience"].ToString(),
+                Purpose = form["purpose"].ToString(),
+                SlideCount = int.TryParse(form["slideCount"], out var count) ? count : 10,
+                Language = form["language"].ToString(),
+                AspectRatio = form["aspectRatio"].ToString(),
+                IncludeSpeakerNotes = bool.TryParse(form["includeSpeakerNotes"], out var notes) && notes,
+                IncludeArchitectureDiagrams = bool.TryParse(form["includeArchitectureDiagrams"], out var diagrams) && diagrams,
+                IncludeScreenshots = bool.TryParse(form["includeScreenshots"], out var screenshots) && screenshots
+            };
+            var result = await studio.PreviewAsync(presentationRequest, form.Files["file"], cancellationToken);
+            return Results.Ok(result);
+        }
+
+        var jsonRequest = await request.ReadFromJsonAsync<PresentationRequest>(cancellationToken);
+        if (jsonRequest is null)
+            return Results.BadRequest(new { error = "A presentation request is required." });
+        var jsonResult = await studio.PreviewAsync(jsonRequest, null, cancellationToken);
+        return Results.Ok(jsonResult);
+    }
+    catch (AnalysisProviderException exception)
+    {
+        return Results.Json(new
+        {
+            error = "AI presentation unavailable – provider error.",
+            detail = exception.Message
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+}).AllowAnonymous().DisableAntiforgery();
+
+app.MapPut("/api/presentations/{id:guid}", (Guid id,
+    PresentationDocument presentation,
+    PresentationStudioService studio) =>
+{
+    try
+    {
+        if (presentation.Id != id)
+            return Results.BadRequest(new { error = "Presentation ID mismatch." });
+        presentation = new PresentationDocument
+        {
+            Id = presentation.Id,
+            Title = presentation.Title,
+            Description = presentation.Description,
+            SourceType = presentation.SourceType,
+            SourceReference = presentation.SourceReference,
+            TargetAudience = presentation.TargetAudience,
+            Theme = presentation.Theme,
+            AspectRatio = presentation.AspectRatio,
+            TotalSlides = presentation.Slides.Count,
+            CreatedAt = presentation.CreatedAt,
+            AIProvider = presentation.AIProvider,
+            AIModel = presentation.AIModel,
+            Status = presentation.Status,
+            Slides = presentation.Slides
+        };
+        studio.Update(presentation);
+        return Results.Ok(presentation);
+    }
+    catch (AnalysisProviderException exception)
+    {
+        return Results.Json(new { error = exception.Message }, statusCode: StatusCodes.Status400BadRequest);
+    }
+}).AllowAnonymous();
+
+app.MapGet("/api/presentations", (PresentationStudioService studio) =>
+    Results.Ok(studio.History)).AllowAnonymous();
+
+app.MapGet("/api/presentations/{id:guid}", (Guid id, PresentationStudioService studio) =>
+{
+    try { return Results.Ok(studio.Get(id)); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+}).AllowAnonymous();
+
+app.MapGet("/api/presentations/{id:guid}/pptx", (Guid id,
+    PresentationStudioService studio) =>
+{
+    try
+    {
+        var presentation = studio.Get(id);
+        var bytes = studio.Pptx(presentation);
+        var name = presentation.Title.Replace(" ", "-").Replace("/", "-") + ".pptx";
+        return Results.File(bytes, "application/vnd.openxmlformats-officedocument.presentationml.presentation", name);
+    }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (AnalysisProviderException exception)
+    {
+        return Results.Json(new { error = exception.Message }, statusCode: StatusCodes.Status400BadRequest);
+    }
+}).AllowAnonymous();
+
+app.MapGet("/api/presentations/{id:guid}/pdf", (Guid id,
+    PresentationStudioService studio) =>
+{
+    try
+    {
+        var presentation = studio.Get(id);
+        var bytes = studio.Pdf(presentation);
+        var name = presentation.Title.Replace(" ", "-").Replace("/", "-") + ".pdf";
+        return Results.File(bytes, "application/pdf", name);
+    }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (AnalysisProviderException exception)
+    {
+        return Results.Json(new { error = exception.Message }, statusCode: StatusCodes.Status400BadRequest);
+    }
+}).AllowAnonymous();
+
+app.MapDelete("/api/presentations/{id:guid}", (Guid id,
+    PresentationStudioService studio) =>
+    studio.Delete(id) ? Results.NoContent() : Results.NotFound()).AllowAnonymous();
 
 app.Run();
 

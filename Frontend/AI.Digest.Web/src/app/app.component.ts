@@ -25,6 +25,8 @@ import {
   LucideFileText,
   LucideFiles,
   LucideLayoutDashboard,
+  LucideMonitor,
+  LucidePresentation,
   LucideSearch,
   LucideSettings,
   LucideShieldCheck,
@@ -157,12 +159,42 @@ interface DigestResult {
 }
 
 type AnalysisStatus = 'Successful' | 'Failed';
-type NavigationTab = 'Dashboard' | 'Document Analysis' | 'Analytics' | 'History';
+type NavigationTab = 'Dashboard' | 'Document Analysis' | 'Presentation Studio' | 'Analytics' | 'History';
 type TrendPeriod = 'daily' | 'weekly' | 'monthly';
 type HistorySort = 'date' | 'name' | 'risk';
 type HistoryStatusFilter = 'All' | AnalysisStatus;
 type AnalysisMode = 'Configured' | 'Deterministic';
 
+interface PresentationSlide {
+  slideNumber: number;
+  title: string;
+  subtitle: string;
+  layoutType: string;
+  content: string[];
+  visualElements: { type: string; label: string; value: string }[];
+  diagram?: { type: string; mermaid: string };
+  chart?: { type: string; labels: string[]; values: number[] };
+  screenshotReferences: string[];
+  speakerNotes: string;
+  sourceReferences: string[];
+}
+
+interface PresentationDocument {
+  id: string;
+  title: string;
+  description: string;
+  sourceType: string;
+  sourceReference: string;
+  targetAudience: string;
+  theme: string;
+  aspectRatio: string;
+  totalSlides: number;
+  createdAt: string;
+  aiProvider: string;
+  aiModel: string;
+  status: string;
+  slides: PresentationSlide[];
+}
 interface AnalysisHistoryEntry {
   id: string;
   analysedAt: string;
@@ -184,7 +216,7 @@ interface TrendBucket {
 const HISTORY_STORAGE_KEY = 'ai-digest-analysis-history';
 const MAX_HISTORY_ENTRIES = 20;
 const SUPPORTED_EXTENSIONS = ['.md', '.txt', '.html', '.htm', '.json', '.xml'];
-const NAV_ITEMS: NavigationTab[] = ['Dashboard', 'Document Analysis', 'Analytics', 'History'];
+const NAV_ITEMS: NavigationTab[] = ['Dashboard', 'Document Analysis', 'Presentation Studio', 'Analytics', 'History'];
 
 @Component({
   selector: 'app-root',
@@ -214,6 +246,8 @@ const NAV_ITEMS: NavigationTab[] = ['Dashboard', 'Document Analysis', 'Analytics
     LucideFileText,
     LucideFiles,
     LucideLayoutDashboard,
+    LucideMonitor,
+      LucidePresentation,
     LucideSearch,
     LucideSettings,
     LucideShieldCheck,
@@ -251,6 +285,24 @@ export class AppComponent {
   readonly findingSeverity = signal('All');
   readonly findingCategory = signal('All');
   readonly minimumConfidence = signal(0);
+  readonly presentationSource = signal<'Markdown' | 'GitHub' | 'ApplicationUrl' | 'UseCase'>('Markdown');
+  readonly presentationFile = signal<File | null>(null);
+  readonly presentationSourceReference = signal('');
+  readonly presentationUseCase = signal('');
+  readonly presentationTitle = signal('AI Document Intelligence Overview');
+  readonly presentationAudience = signal('Enterprise stakeholders');
+  readonly presentationPurpose = signal('Explain the solution, architecture, benefits and roadmap');
+  readonly presentationSlideCount = signal(10);
+  readonly presentationLanguage = signal('English');
+  readonly presentationAspectRatio = signal('16:9');
+  readonly includeSpeakerNotes = signal(true);
+  readonly includeArchitectureDiagrams = signal(true);
+  readonly includeScreenshots = signal(true);
+  readonly presentationLoading = signal(false);
+  readonly presentationError = signal('');
+  readonly presentation = signal<PresentationDocument | null>(null);
+  readonly presentationPreviewIndex = signal(0);
+  readonly presentationHistory = signal<PresentationDocument[]>([]);
 
   readonly findings = computed(() => {
     const data = this.result();
@@ -529,6 +581,12 @@ export class AppComponent {
   readonly recentHistory = computed(() => this.history().slice(0, 5));
 
   readonly notificationCount = computed(() => this.failedCount());
+  readonly presentationPreviewSlide = computed(() => {
+    const result = this.presentation();
+    if (!result?.slides.length) return null;
+    const index = Math.min(Math.max(this.presentationPreviewIndex(), 0), result.slides.length - 1);
+    return result.slides[index];
+  });
 
   constructor() {
     this.loadHistory();
@@ -536,6 +594,7 @@ export class AppComponent {
 
   setTab(tab: NavigationTab) {
     this.activeTab.set(tab);
+    if (tab === 'Presentation Studio') this.loadPresentationHistory();
     this.notificationsOpen.set(false);
     this.settingsOpen.set(false);
   }
@@ -635,7 +694,7 @@ export class AppComponent {
   }
 
   jumpToSource(evidence: Evidence) {
-    this.apiError.set(`Source reference: ${evidence.section}, lines ${evidence.sourceLineStart}–${evidence.sourceLineEnd}.`);
+    this.apiError.set(`Source reference: ${evidence.section}, lines ${evidence.sourceLineStart}ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“${evidence.sourceLineEnd}.`);
     this.activeTab.set('Document Analysis');
     document.getElementById('findings')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -656,6 +715,95 @@ export class AppComponent {
     const data = this.result();
     if (!data) return;
     this.download(this.buildMarkdown(data), 'text/markdown', this.reportName(data.documentTitle));
+  }
+
+  selectPresentationSource(source: 'Markdown' | 'GitHub' | 'ApplicationUrl' | 'UseCase') {
+    this.presentationSource.set(source);
+  }
+
+  selectPresentationFile(event: Event) {
+    const file = (event.target as HTMLInputElement).files?.[0];
+    if (file) this.presentationFile.set(file);
+  }
+
+  async generatePresentation() {
+    this.presentationLoading.set(true);
+    this.presentationError.set('');
+    try {
+      const form = new FormData();
+      form.append('sourceType', this.presentationSource());
+      form.append('sourceReference', this.presentationSourceReference());
+      form.append('useCase', this.presentationUseCase());
+      form.append('title', this.presentationTitle());
+      form.append('targetAudience', this.presentationAudience());
+      form.append('purpose', this.presentationPurpose());
+      form.append('slideCount', String(this.presentationSlideCount()));
+      form.append('language', this.presentationLanguage());
+      form.append('aspectRatio', this.presentationAspectRatio());
+      form.append('includeSpeakerNotes', String(this.includeSpeakerNotes()));
+      form.append('includeArchitectureDiagrams', String(this.includeArchitectureDiagrams()));
+      form.append('includeScreenshots', String(this.includeScreenshots()));
+      if (this.presentationFile()) form.append('file', this.presentationFile()!);
+      const result = await this.http.post<PresentationDocument>(
+        'http://127.0.0.1:5050/api/presentations/preview', form).toPromise();
+      if (!result) throw new Error('The presentation service returned no result.');
+      this.presentation.set(result);
+      this.presentationPreviewIndex.set(0);
+      await this.loadPresentationHistory();
+    } catch (error: unknown) {
+      const httpError = error as { status?: number; error?: { error?: string; detail?: string } };
+      this.presentationError.set(httpError.error?.error
+        ? `${httpError.error.error}${httpError.error.detail ? ` ${httpError.error.detail}` : ''}`
+        : `Presentation generation failed${httpError.status ? ` (${httpError.status})` : ''}.`);
+    } finally {
+      this.presentationLoading.set(false);
+    }
+  }
+
+  async loadPresentationHistory() {
+    try {
+      const history = await this.http.get<PresentationDocument[]>(
+        'http://127.0.0.1:5050/api/presentations').toPromise();
+      this.presentationHistory.set(history ?? []);
+    } catch {
+      this.presentationHistory.set([]);
+    }
+  }
+
+  previousPresentationSlide() {
+    this.presentationPreviewIndex.update(index => Math.max(0, index - 1));
+  }
+
+  nextPresentationSlide() {
+    const result = this.presentation();
+    if (!result) return;
+    this.presentationPreviewIndex.update(index => Math.min(result.slides.length - 1, index + 1));
+  }
+
+  updatePresentationSlideTitle(value: string) {
+    const result = this.presentation();
+    if (!result) return;
+    const slides = result.slides.map((slide, index) =>
+      index === this.presentationPreviewIndex() ? { ...slide, title: value } : slide);
+    this.presentation.set({ ...result, slides });
+  }
+
+  downloadPresentationPptx(presentation: PresentationDocument) {
+    window.open(`http://127.0.0.1:5050/api/presentations/${presentation.id}/pptx`, '_blank');
+  }
+
+  downloadPresentationPdf(presentation: PresentationDocument) {
+    window.open(`http://127.0.0.1:5050/api/presentations/${presentation.id}/pdf`, '_blank');
+  }
+
+  openPresentation(presentation: PresentationDocument) {
+    this.presentation.set(presentation);
+    this.presentationPreviewIndex.set(0);
+  }
+
+  async deletePresentation(presentation: PresentationDocument) {
+    await this.http.delete(`http://127.0.0.1:5050/api/presentations/${presentation.id}`).toPromise();
+    await this.loadPresentationHistory();
   }
 
   setHistorySort(sort: HistorySort) {
@@ -702,7 +850,7 @@ export class AppComponent {
   }
 
   riskLevel(entry: AnalysisHistoryEntry) {
-    if (!entry.result) return '—';
+    if (!entry.result) return 'ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â';
     const priorities = this.findingsFor(entry.result).map(finding => finding.priority);
     return priorities.includes('Critical') ? 'Critical' :
       priorities.includes('High') ? 'High' :
@@ -1075,7 +1223,7 @@ export class AppComponent {
       data.executiveSummary,
       '',
       ...findings.map(finding =>
-        `## ${finding.priority}: ${finding.title}\n\n${finding.description}\n\nAgent: ${finding.agentName} · Confidence: ${finding.confidence}% · Source: ${finding.evidence?.section}, line ${finding.evidence?.sourceLineStart}\n\n> ${finding.evidence?.sourceText ?? ''}`)
+        `## ${finding.priority}: ${finding.title}\n\n${finding.description}\n\nAgent: ${finding.agentName} Ãƒâ€šÃ‚Â· Confidence: ${finding.confidence}% Ãƒâ€šÃ‚Â· Source: ${finding.evidence?.section}, line ${finding.evidence?.sourceLineStart}\n\n> ${finding.evidence?.sourceText ?? ''}`)
     ].join('\n');
   }
 

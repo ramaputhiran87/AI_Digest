@@ -76,6 +76,24 @@ Configuration can be supplied in `appsettings.json` or with .NET environment-var
 | `Ollama__BaseUrl` | `http://localhost:11434` | Local Ollama URL |
 | `Ollama__Model` | `qwen3:8b` | Local model tag |
 
+## Presentation Studio
+
+The Presentation Studio accepts Markdown/TXT uploads, public GitHub repository URLs, authorized remote application URLs, and use-case descriptions. Select a source in the Angular UI, configure title/audience/purpose/slide count/aspect ratio/options, and generate an editable PPTX plus PDF.
+
+Presentation API endpoints:
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/presentations/preview` | Generate or preview a presentation |
+| GET | `/api/presentations` | List API-session presentation history |
+| GET | `/api/presentations/{id}` | Retrieve a presentation |
+| PUT | `/api/presentations/{id}` | Save preview edits |
+| GET | `/api/presentations/{id}/pptx` | Download editable PPTX |
+| GET | `/api/presentations/{id}/pdf` | Download PDF |
+| DELETE | `/api/presentations/{id}` | Delete presentation |
+
+GitHub access can use `GitHub__Token` for private repositories. Application URL inspection rejects loopback, private networks, cloud metadata ranges, and unvalidated schemes by default. Use a remote HTTPS application URL or explicitly authorized browser integration for local application inspection. The output uses the AI_Digest navy, blue, white and yellow design tokens.
+
 ## Run the application
 
 Start the API from `Backend\AI.Digest.Api`:

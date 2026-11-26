@@ -13,6 +13,7 @@
         @switch (item) {
           @case ('Dashboard') { <svg lucideLayoutDashboard></svg> }
           @case ('Document Analysis') { <svg lucideFileSearch></svg> }
+          @case ('Presentation Studio') { <svg lucidePresentation></svg> }
           @case ('Analytics') { <svg lucideChartNoAxesCombined></svg> }
           @case ('History') { <svg lucideClock></svg> }
         }
@@ -354,6 +355,84 @@
       </article>
     </section>
     @if (!history().length) { <div class="chart-empty-note"><svg lucideActivity></svg> Charts will populate after you complete analyses. No sample values are shown.</div> }
+  }
+
+  @if (activeTab() === 'Presentation Studio') {
+    <section class="page-heading">
+      <div><div class="eyebrow"><span class="eyebrow-dot"></span> PRESENTATION WORKSPACE</div><h1>AI Presentation Studio</h1><p>Transform documents, repositories and applications into professional presentations.</p></div>
+      @if (presentation()) { <div class="heading-actions"><button class="button button-secondary" (click)="downloadPresentationPptx(presentation()!)"><svg lucideDownload></svg> Download PPTX</button><button class="button button-secondary" (click)="downloadPresentationPdf(presentation()!)"><svg lucideFileText></svg> Download PDF</button></div> }
+    </section>
+
+    @if (presentationError()) { <div class="api-error"><svg lucideCircleAlert></svg><span>{{ presentationError() }}</span></div> }
+
+    <section class="panel presentation-workbench">
+      <div class="panel-heading"><div><h2>Create presentation</h2><p>Select a source and configure the AI-generated slide story.</p></div><span class="secure-note"><svg lucideSparkles></svg> AI planning</span></div>
+      <div class="source-card-grid">
+        <button class="source-card" [class.selected]="presentationSource() === 'Markdown'" (click)="selectPresentationSource('Markdown')"><span class="source-card-icon"><svg lucideFileText></svg></span><strong>Markdown Upload</strong><small>MD, Markdown or TXT</small></button>
+        <button class="source-card" [class.selected]="presentationSource() === 'GitHub'" (click)="selectPresentationSource('GitHub')"><span class="source-card-icon"><svg lucideFiles></svg></span><strong>GitHub Repository</strong><small>Public or authorized private repository</small></button>
+        <button class="source-card" [class.selected]="presentationSource() === 'ApplicationUrl'" (click)="selectPresentationSource('ApplicationUrl')"><span class="source-card-icon"><svg lucideMonitor></svg></span><strong>Application URL</strong><small>Authorized remote inspection</small></button>
+        <button class="source-card" [class.selected]="presentationSource() === 'UseCase'" (click)="selectPresentationSource('UseCase')"><span class="source-card-icon"><svg lucideSparkles></svg></span><strong>Use-Case Description</strong><small>Describe the required presentation</small></button>
+      </div>
+
+      <div class="presentation-config-grid">
+        <div class="presentation-source-config">
+          @if (presentationSource() === 'Markdown') {
+            <label class="presentation-input-file"><svg lucideCloudUpload></svg><span>{{ presentationFile()?.name || 'Choose Markdown or TXT file' }}</span><input type="file" accept=".md,.markdown,.txt" (change)="selectPresentationFile($event)"></label>
+          } @else if (presentationSource() === 'GitHub') {
+            <label>GitHub repository URL<input [ngModel]="presentationSourceReference()" (ngModelChange)="presentationSourceReference.set($event)" placeholder="https://github.com/owner/repository"></label>
+          } @else if (presentationSource() === 'UseCase') {
+            <label>Use-case description<textarea [ngModel]="presentationUseCase()" (ngModelChange)="presentationUseCase.set($event)" rows="6" placeholder="Describe the business problem, solution, architecture, AI integrations and roadmap."></textarea></label>
+          } @else {
+            <label>Application URL<input [ngModel]="presentationSourceReference()" (ngModelChange)="presentationSourceReference.set($event)" placeholder="https://application.example.com"></label>
+          }
+        </div>
+        <div class="presentation-options">
+          <label>Presentation title<input [ngModel]="presentationTitle()" (ngModelChange)="presentationTitle.set($event)"></label>
+          <label>Target audience<input [ngModel]="presentationAudience()" (ngModelChange)="presentationAudience.set($event)"></label>
+          <label>Presentation purpose<input [ngModel]="presentationPurpose()" (ngModelChange)="presentationPurpose.set($event)"></label>
+          <div class="presentation-option-grid"><label>Slide count<select [ngModel]="presentationSlideCount()" (ngModelChange)="presentationSlideCount.set($event)"><option [ngValue]="7">Quick · 7</option><option [ngValue]="12">Standard · 12</option><option [ngValue]="20">Detailed · 20</option><option [ngValue]="30">Maximum · 30</option></select></label><label>Aspect ratio<select [ngModel]="presentationAspectRatio()" (ngModelChange)="presentationAspectRatio.set($event)"><option value="16:9">Widescreen 16:9</option><option value="4:3">Standard 4:3</option></select></label><label>Language<select [ngModel]="presentationLanguage()" (ngModelChange)="presentationLanguage.set($event)"><option>English</option><option>French</option><option>German</option><option>Spanish</option></select></label></div>
+          <div class="presentation-switches"><label><input type="checkbox" [ngModel]="includeSpeakerNotes()" (ngModelChange)="includeSpeakerNotes.set($event)"> Speaker notes</label><label><input type="checkbox" [ngModel]="includeArchitectureDiagrams()" (ngModelChange)="includeArchitectureDiagrams.set($event)"> Architecture diagrams</label><label><input type="checkbox" [ngModel]="includeScreenshots()" (ngModelChange)="includeScreenshots.set($event)"> Application screenshots</label></div>
+        </div>
+      </div>
+      <div class="upload-footer"><span class="upload-privacy"><svg lucideShieldCheck></svg> Source content is sent only to the configured AI provider.</span><button class="button button-primary analyze-button" [disabled]="presentationLoading()" (click)="generatePresentation()">@if (presentationLoading()) { <span class="button-spinner"></span> Generating… } @else { <svg lucideSparkles></svg> Generate presentation }</button></div>
+    </section>
+
+    @if (presentation(); as deck) {
+      <section class="presentation-preview-layout">
+        <aside class="panel slide-thumbnails"><div class="panel-heading"><div><h2>Slides</h2><p>{{ deck.totalSlides }} slides</p></div></div><div class="thumbnail-list">@for (slide of deck.slides; track slide.slideNumber) { <button class="slide-thumbnail" [class.selected]="presentationPreviewIndex() === $index" (click)="presentationPreviewIndex.set($index)"><span>{{ slide.slideNumber }}</span><strong>{{ slide.title }}</strong></button> }</div></aside>
+        <article class="panel slide-preview"><div class="slide-preview-toolbar"><button class="table-action" aria-label="Previous slide" (click)="previousPresentationSlide()"><svg lucideChevronLeft></svg></button><span>{{ presentationPreviewIndex() + 1 }} / {{ deck.slides.length }}</span><button class="table-action" aria-label="Next slide" (click)="nextPresentationSlide()"><svg lucideChevronRight></svg></button></div>
+          @if (presentationPreviewSlide(); as slide) {
+            <div class="slide-canvas" [class.standard]="deck.aspectRatio === '4:3'">
+              <div class="slide-accent"></div>
+              <span class="slide-layout-label">{{ slide.layoutType }}</span>
+              <div class="slide-canvas-body">
+                <h2 contenteditable="true" (input)="updatePresentationSlideTitle($any($event.target).innerText)">{{ slide.title }}</h2>
+                @if (slide.subtitle) { <p class="slide-subtitle">{{ slide.subtitle }}</p> }
+                <div class="slide-content-list">
+                  @for (item of slide.content; track $index) {
+                    <div><i></i><span>{{ item }}</span></div>
+                  }
+                </div>
+                @if (slide.visualElements.length) {
+                  <div class="slide-kpi-grid">
+                    @for (visual of slide.visualElements; track visual.label) {
+                      <div><small>{{ visual.label }}</small><strong>{{ visual.value }}</strong></div>
+                    }
+                  </div>
+                }
+                @if (slide.diagram) {
+                  <div class="slide-diagram"><strong>{{ slide.diagram.type }} diagram</strong><small>{{ slide.diagram.mermaid }}</small></div>
+                }
+              </div>
+              <span class="slide-page-number">{{ slide.slideNumber }}</span>
+            </div>
+            <div class="speaker-notes"><strong>Speaker notes</strong><p>{{ slide.speakerNotes || 'No speaker notes requested.' }}</p></div>
+          }
+        </article>
+      </section>
+
+      <section class="panel presentation-history"><div class="panel-heading"><div><h2>Presentation history</h2><p>Saved presentations in this API session</p></div></div><div class="presentation-history-list">@for (item of presentationHistory(); track item.id) { <div class="presentation-history-row"><span class="file-type-icon"><svg lucidePresentation></svg></span><span><strong>{{ item.title }}</strong><small>{{ item.sourceType }} · {{ item.totalSlides }} slides · {{ item.aiProvider }}</small></span><div><button class="table-action" title="Preview" aria-label="Preview presentation" (click)="openPresentation(item)"><svg lucideEye></svg></button><button class="table-action" title="Download PPTX" aria-label="Download presentation PPTX" (click)="downloadPresentationPptx(item)"><svg lucideDownload></svg></button><button class="table-action danger-action" title="Delete" aria-label="Delete presentation" (click)="deletePresentation(item)"><svg lucideTrash2></svg></button></div></div> } @empty { <div class="empty-state compact-empty"><strong>No presentations yet</strong></div> }</div></section>
+    }
   }
 
   @if (activeTab() === 'History') {
