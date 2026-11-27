@@ -232,6 +232,7 @@ public sealed class LlmAnalysisProvider(
             Provider: preferredProviderId,
             Model: aiConfiguration.Model(preferredProviderId),
             Message: "Consolidating supported findings and source evidence."));
+        var rejectedOutputItems = 0;
         var candidates = specialistResults
             .SelectMany(response => response.Findings)
             .DistinctBy(finding =>
@@ -243,28 +244,8 @@ public sealed class LlmAnalysisProvider(
             BuildConsolidationPrompt(document, understanding, specialistResults, candidates, useCase),
             report =>
             {
-                if (report.Findings is null)
-                    throw new AnalysisProviderException("The model returned no final findings array.");
-
-                var validated = new AiAnalysisReport
-                {
-                    SourceType = report.SourceType,
-                    ExecutiveSummary = report.ExecutiveSummary,
-                    DocumentUnderstanding = report.DocumentUnderstanding,
-                    SecurityAssessment = report.SecurityAssessment,
-                    ArchitectureAssessment = report.ArchitectureAssessment,
-                    ComplianceAssessment = report.ComplianceAssessment,
-                    BusinessImpact = report.BusinessImpact,
-                    Sections = report.Sections,
-                    Findings = report.Findings
-                        .DistinctBy(finding =>
-                            $"{Normalize(finding.Category)}:{Normalize(finding.Title)}:" +
-                            string.Join("|", (finding.Evidence ?? []).Select(evidence =>
-                                $"{evidence.StartLine}:{Normalize(evidence.Quotation)}")))
-                        .ToList(),
-                    PriorityActionPlan = report.PriorityActionPlan,
-                    OverallAssessment = report.OverallAssessment
-                };
+                var validated = NormalizeConsolidatedReport(
+                    report, document, understanding, out rejectedOutputItems);
                 progress?.Report(new AnalysisProgressEvent(
                     "Evidence validation",
                     CompletedChunks: chunks.Count,
@@ -338,6 +319,9 @@ public sealed class LlmAnalysisProvider(
             consolidated.ExecutiveSummary)
         {
             AiReport = consolidated,
+            Warnings = rejectedOutputItems == 0
+                ? []
+                : [$"{rejectedOutputItems} AI-generated finding(s) or section(s) were omitted because their source evidence could not be verified."],
             ModelInfo = new AiModelInfo
             {
                 Provider = string.Join(", ", successfulProviders.Select(
@@ -672,7 +656,9 @@ public sealed class LlmAnalysisProvider(
         }
         Every source-derived finding or section must include source evidence. AI elaboration, suggestions,
         assumptions, and clarification questions may omit evidence and must remain explicitly labeled.
-        Zero findings or sections is valid. Limit findings to 50, sections to 30, and action items to 20.
+        If an exact quotation or its original line number is uncertain, omit that item instead of
+        approximating its evidence. Zero findings or sections is valid. Limit findings to 50,
+        sections to 30, and action items to 20.
         Do not claim human verification or imply that a documented feature is operational.
 
         Document: {{document.Title}} ({{document.SourceType}})
@@ -817,6 +803,162 @@ public sealed class LlmAnalysisProvider(
                         $"{evidence.StartLine}-{evidence.EndLine}.");
             }
         }
+    }
+
+    private static AiAnalysisReport NormalizeConsolidatedReport(
+        AiAnalysisReport report,
+        ParsedDocument document,
+        DocumentUnderstanding fallbackUnderstanding,
+        out int rejectedItems)
+    {
+        rejectedItems = 0;
+        var understanding = NormalizeUnderstanding(IsUsableUnderstanding(report.DocumentUnderstanding)
+            ? report.DocumentUnderstanding
+            : fallbackUnderstanding, document);
+        var sectionIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var sections = new List<AnalysisContentSection>();
+        foreach (var section in report.Sections ?? [])
+        {
+            if (sections.Count >= 30 ||
+                !IsValidSection(section, document) ||
+                !sectionIds.Add(section.Id))
+            {
+                rejectedItems++;
+                continue;
+            }
+
+            sections.Add(section);
+        }
+
+        var findings = new List<AiFinding>();
+        foreach (var finding in report.Findings ?? [])
+        {
+            if (findings.Count >= 50 || !IsValidFinding(finding, document))
+            {
+                rejectedItems++;
+                continue;
+            }
+
+            findings.Add(finding);
+        }
+
+        return new AiAnalysisReport
+        {
+            SourceType = string.IsNullOrWhiteSpace(report.SourceType)
+                ? document.SourceType
+                : report.SourceType,
+            ExecutiveSummary = string.IsNullOrWhiteSpace(report.ExecutiveSummary)
+                ? understanding.Summary
+                : report.ExecutiveSummary,
+            DocumentUnderstanding = understanding,
+            SecurityAssessment = report.SecurityAssessment ?? "",
+            ArchitectureAssessment = report.ArchitectureAssessment ?? "",
+            ComplianceAssessment = report.ComplianceAssessment ?? "",
+            BusinessImpact = report.BusinessImpact ?? "",
+            Sections = sections,
+            Findings = findings
+                .DistinctBy(finding =>
+                    $"{Normalize(finding.Category)}:{Normalize(finding.Title)}:" +
+                    string.Join("|", finding.Evidence.Select(evidence =>
+                        $"{evidence.StartLine}:{Normalize(evidence.Quotation)}")))
+                .ToList(),
+            PriorityActionPlan = (report.PriorityActionPlan ?? [])
+                .Where(action => !string.IsNullOrWhiteSpace(action))
+                .Take(20)
+                .ToList(),
+            OverallAssessment = report.OverallAssessment ?? ""
+        };
+    }
+
+    private static bool IsUsableUnderstanding(DocumentUnderstanding? understanding) =>
+        understanding is not null &&
+        !string.IsNullOrWhiteSpace(understanding.Purpose) &&
+        !string.IsNullOrWhiteSpace(understanding.Domain) &&
+        !string.IsNullOrWhiteSpace(understanding.Summary) &&
+        understanding.KeyFacts is not null &&
+        understanding.Components is not null &&
+        understanding.Relationships is not null;
+
+    private static DocumentUnderstanding NormalizeUnderstanding(
+        DocumentUnderstanding understanding,
+        ParsedDocument document) =>
+        new()
+        {
+            Purpose = string.IsNullOrWhiteSpace(understanding.Purpose)
+                ? "Not stated in the source document."
+                : understanding.Purpose,
+            Domain = string.IsNullOrWhiteSpace(understanding.Domain)
+                ? "Not specified."
+                : understanding.Domain,
+            KeyFacts = (understanding.KeyFacts ?? [])
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Take(100)
+                .ToList(),
+            Components = (understanding.Components ?? [])
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Take(100)
+                .ToList(),
+            Relationships = (understanding.Relationships ?? [])
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Take(100)
+                .ToList(),
+            Summary = string.IsNullOrWhiteSpace(understanding.Summary)
+                ? $"Summary not provided for {document.Title}."
+                : understanding.Summary
+        };
+
+    private static bool IsValidSection(
+        AnalysisContentSection? section,
+        ParsedDocument document)
+    {
+        var allowedOrigins = new[]
+        {
+            "SourceConfirmed", "UserConfirmed", "AIElaboration", "Suggested",
+            "Assumption", "RequiresClarification", "NotSpecified", "UserEdited"
+        };
+        if (section is null ||
+            string.IsNullOrWhiteSpace(section.Id) ||
+            section.Id.Length > 80 ||
+            section.Id.Any(character => !char.IsLetterOrDigit(character) && character is not '-' and not '_') ||
+            string.IsNullOrWhiteSpace(section.Title) ||
+            string.IsNullOrWhiteSpace(section.Type) ||
+            string.IsNullOrWhiteSpace(section.Content) ||
+            !allowedOrigins.Contains(section.Origin, StringComparer.Ordinal) ||
+            section.Evidence is null ||
+            section.Evidence.Count > 10 ||
+            (section.Origin == "SourceConfirmed" && section.Evidence.Count == 0))
+        {
+            return false;
+        }
+
+        return section.Evidence.All(evidence =>
+            evidence is not null &&
+            !string.IsNullOrWhiteSpace(evidence.Quotation) &&
+            evidence.StartLine >= 1 &&
+            evidence.EndLine >= evidence.StartLine &&
+            EvidenceMatches(document, evidence));
+    }
+
+    private static bool IsValidFinding(AiFinding? finding, ParsedDocument document)
+    {
+        if (finding is null ||
+            finding.Evidence is null ||
+            finding.Evidence.Count == 0 ||
+            finding.Evidence.Any(evidence => evidence is null))
+        {
+            return false;
+        }
+
+        try
+        {
+            ValidateFindingShape(finding);
+        }
+        catch (AnalysisProviderException)
+        {
+            return false;
+        }
+
+        return finding.Evidence.All(evidence => EvidenceMatches(document, evidence));
     }
 
     private static void ValidateFindingShape(AiFinding finding)

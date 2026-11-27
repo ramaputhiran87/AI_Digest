@@ -99,6 +99,7 @@ public sealed class DocumentAnalysisService(
             AnalysisProvider = analysis.ProviderName,
             ModelInfo = analysis.ModelInfo,
             AiReport = analysis.AiReport,
+            Warnings = analysis.Warnings,
             ExecutiveSummary = analysis.ExecutiveSummary ?? (evidence.Count == 0
                 ? "No evidence-backed findings were identified. Human review is required."
                 : $"Analysis identified {all.Count} evidence-backed findings, {analysis.Contradictions.Count} contradictions, {analysis.HumanReview.Count} human-review items, and {analysis.Opportunities.Count} opportunities across {all.Select(f => f.AgentName).Distinct().Count()} specialist agents."),

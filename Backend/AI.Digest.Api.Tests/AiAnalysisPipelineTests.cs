@@ -256,18 +256,20 @@ public sealed class AiAnalysisPipelineTests
     }
 
     [Fact]
-    public async Task RejectsModelEvidenceThatIsNotPresentInTheDocument()
+    public async Task OmitsUnsupportedFindingsAndSectionsWithoutFailingTheWholeAnalysis()
     {
         var client = new MockAiModelClient(inventEvidence: true);
         var service = CreateService(client);
 
-        var exception = await Assert.ThrowsAsync<AnalysisProviderException>(() =>
-            service.AnalyseAsync("architecture.md", Source, null));
+        var result = await service.AnalyseAsync("architecture.md", Source, null);
 
-        Assert.Contains(
-            "unsupported evidence",
-            exception.InnerException?.Message ?? exception.Message,
-            StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(result.AiReport!.Findings);
+        Assert.Single(result.AiReport.Sections);
+        Assert.Equal("The API stores audit events for 90 days.",
+            result.AiReport.Sections[0].Evidence[0].Quotation);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("source evidence could not be verified", StringComparison.Ordinal));
+        Assert.Equal("An API architecture document.", result.AiReport.DocumentUnderstanding.Summary);
     }
 
     [Fact]

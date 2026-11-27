@@ -311,6 +311,13 @@
         }
       </section>
 
+      @if (data.warnings?.length) {
+        <div class="analysis-warning" role="status">
+          <svg lucideCircleAlert></svg>
+          <div>@for (warning of data.warnings ?? []; track $index) { <p>{{ warning }}</p> }</div>
+        </div>
+      }
+
       @if (data.modelInfo; as modelInfo) {
         <section class="panel model-info-panel">
           <div class="model-info-title"><span class="section-icon icon-blue"><svg lucideSparkles></svg></span><div><h3>AI model transparency</h3><span>Actual provider inference · {{ modelInfo.status }}</span></div></div>

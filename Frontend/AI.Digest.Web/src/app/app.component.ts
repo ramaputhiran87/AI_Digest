@@ -147,6 +147,7 @@ interface DigestResult {
   analysisProvider?: string;
   modelInfo?: AiModelInfo;
   aiReport?: AiAnalysisReport;
+  warnings?: string[];
   executiveSummary: string;
   highPriorityItems: Finding[];
   criticalRisks: Finding[];

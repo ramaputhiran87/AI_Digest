@@ -30,6 +30,7 @@ public sealed record ProviderAnalysisResult(
 {
     public AiAnalysisReport? AiReport { get; init; }
     public AiModelInfo? ModelInfo { get; init; }
+    public List<string> Warnings { get; init; } = [];
 }
 
 public sealed class AnalysisProviderException : Exception
