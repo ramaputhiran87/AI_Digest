@@ -38,6 +38,12 @@ public sealed class PresentationStudioService(
 
     public PresentationDocument Get(Guid id) => historyStore.Get(id);
 
+    public IReadOnlyCollection<PresentationVersionSummary> Versions(Guid id) => historyStore.Versions(id);
+
+    public PresentationDocument GetVersion(Guid id, Guid versionId) => historyStore.GetVersion(id, versionId);
+    public PresentationDocument RestoreVersion(Guid id, Guid versionId) =>
+        historyStore.RestoreVersion(id, versionId);
+
     public bool Delete(Guid id) => historyStore.Delete(id);
 
     public void Update(PresentationDocument presentation)
@@ -72,7 +78,7 @@ public sealed class PresentationStudioService(
             "Auto", "Auto (AI recommendation)", "Neural Intelligence",
             "Cinematic Product Launch", "Executive Gold", "Digital Blueprint",
             "Immersive Storytelling", "Knowledge Universe", "AI_Digest Navy Blue",
-            "Enterprise Light", "Executive Dark", "Technology Blue", "Modern Minimal"
+            "Enterprise Light", "Executive Dark", "Technology Blue", "Modern Minimal", "Prism Blue"
         };
         if (!string.IsNullOrWhiteSpace(request.Theme) &&
             !supportedThemes.Contains(request.Theme.Trim(), StringComparer.OrdinalIgnoreCase))
@@ -81,6 +87,11 @@ public sealed class PresentationStudioService(
                 "The selected presentation theme is not supported.",
                 failureCode: AnalysisFailureCode.InvalidInput);
         }
+        if (request.UserInstructions is { Length: > 5000 } ||
+            request.VisualIntensity is not ("Minimal" or "Balanced" or "Expressive"))
+            throw new AnalysisProviderException(
+                "Presentation instructions or visual intensity are invalid.",
+                failureCode: AnalysisFailureCode.InvalidInput);
         return request;
     }
 
@@ -96,18 +107,74 @@ public sealed class PresentationStudioService(
 public sealed class PresentationHistoryStore
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, PresentationDocument> history = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, List<PresentationVersion>> versions = new();
 
     public IReadOnlyCollection<PresentationDocument> History => history.Values
         .OrderByDescending(presentation => presentation.CreatedAt)
         .ToList();
 
-    public void Save(PresentationDocument presentation) =>
+    public void Save(PresentationDocument presentation)
+    {
+        if (history.TryGetValue(presentation.Id, out var previous) &&
+            !ReferenceEquals(previous, presentation))
+        {
+            var snapshots = versions.GetOrAdd(presentation.Id, _ => []);
+            lock (snapshots)
+            {
+                snapshots.Add(new PresentationVersion
+                {
+                    Label = snapshots.Count == 0 ? "Original AI draft" : "Saved revision",
+                    Presentation = previous
+                });
+                if (snapshots.Count > 30) snapshots.RemoveAt(0);
+            }
+        }
         history[presentation.Id] = presentation;
+    }
+
+    public IReadOnlyCollection<PresentationVersionSummary> Versions(Guid id)
+    {
+        if (!history.ContainsKey(id)) throw new KeyNotFoundException("Presentation was not found.");
+        var snapshots = versions.GetOrAdd(id, _ => []);
+        lock (snapshots) return snapshots
+            .Select(snapshot => new PresentationVersionSummary
+            {
+                Id = snapshot.Id,
+                CreatedAt = snapshot.CreatedAt,
+                Label = snapshot.Label
+            })
+            .ToList();
+    }
+
+    public PresentationDocument GetVersion(Guid id, Guid versionId)
+    {
+        if (!history.ContainsKey(id)) throw new KeyNotFoundException("Presentation was not found.");
+        var snapshots = versions.GetOrAdd(id, _ => []);
+        lock (snapshots)
+            return snapshots.FirstOrDefault(snapshot => snapshot.Id == versionId)?.Presentation ??
+                throw new KeyNotFoundException("Presentation version was not found.");
+    }
+
+    public PresentationDocument RestoreVersion(Guid id, Guid versionId)
+    {
+        var snapshots = versions.GetOrAdd(id, _ => []);
+        lock (snapshots)
+        {
+            var version = snapshots.FirstOrDefault(snapshot => snapshot.Id == versionId) ??
+                throw new KeyNotFoundException("Presentation version was not found.");
+            Save(version.Presentation);
+            return version.Presentation;
+        }
+    }
 
     public PresentationDocument Get(Guid id) =>
         history.TryGetValue(id, out var presentation)
             ? presentation
             : throw new KeyNotFoundException("Presentation was not found.");
 
-    public bool Delete(Guid id) => history.TryRemove(id, out _);
+    public bool Delete(Guid id)
+    {
+        versions.TryRemove(id, out _);
+        return history.TryRemove(id, out _);
+    }
 }

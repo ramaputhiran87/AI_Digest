@@ -11,12 +11,24 @@ public static class PresentationHtmlExporter
         Encoder = JavaScriptEncoder.Default
     };
 
+    private static readonly string PrismStyles = ReadPrismStyles();
+
+    private static string ReadPrismStyles()
+    {
+        using var stream = typeof(PresentationHtmlExporter).Assembly.GetManifestResourceStream("PrismBlue.css")
+            ?? throw new InvalidOperationException("The Prism Blue design tokens are missing.");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
     public static string Export(PresentationDocument presentation)
     {
         var exportData = new
         {
             presentation.Title,
             presentation.Theme,
+            presentation.AspectRatio,
+            presentation.Language,
             ThemeKey = GetThemeKey(presentation.Theme),
             Slides = presentation.Slides.Select(slide => new
             {
@@ -29,15 +41,24 @@ public static class PresentationHtmlExporter
                 slide.VisualElements,
                 slide.Diagram,
                 slide.Chart,
+                slide.Table,
                 slide.SpeakerNotes,
-                slide.SourceReferences
+                slide.SourceReferences,
+                slide.FontFamily,
+                slide.BackgroundColor,
+                slide.TextColor,
+                slide.AccentColor,
+                slide.ContentScale,
+                slide.ContentAlignment,
+                slide.ContentSpacing,
+                slide.ImageDataUrl
             })
         };
         var json = JsonSerializer.Serialize(exportData, JsonOptions);
 
         return """
             <!doctype html>
-            <html lang="en">
+            <html lang="__DOCUMENT_LANGUAGE__">
             <head>
               <meta charset="utf-8">
               <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -45,8 +66,9 @@ public static class PresentationHtmlExporter
               <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
               <title>Interactive Presentation</title>
               <style>
-                :root{color-scheme:light;--bg:#f4f7fc;--fg:#142b52;--muted:#64748b;--accent:#ffc928;--panel:rgba(255,255,255,.82);--line:rgba(100,116,139,.2)}
-                *{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:Inter,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--fg)}
+                __PRISM_STYLES__
+                :root{color-scheme:light;--navy:var(--dd-navy);--deep-navy:var(--dd-deep-navy);--royal:var(--dd-royal-blue);--electric:var(--dd-electric-blue);--cyan:var(--dd-cyan);--teal:var(--dd-teal);--bg:var(--dd-background);--fg:var(--dd-text);--muted:var(--dd-muted);--accent:var(--dd-cyan);--panel:var(--dd-card);--line:var(--dd-border)}
+                *{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:var(--dd-font);background:var(--bg);color:var(--fg)}
                 body{background:radial-gradient(circle at 85% 12%,rgba(255,201,40,.16),transparent 25%),linear-gradient(135deg,#f7f9fd,#edf3ff 60%,#fff)}
                 body.dark{color-scheme:dark;--bg:#0b1730;--fg:#f8fafc;--muted:#c0ccdf;--panel:rgba(255,255,255,.08);--line:rgba(255,255,255,.17);background:radial-gradient(circle at 82% 18%,rgba(43,127,255,.24),transparent 30%),linear-gradient(135deg,#0b1730,#10264a)}
                 body.theme-neural{color-scheme:dark;--bg:#070b18;--fg:#f5f8ff;--muted:#c1d0e7;--panel:rgba(13,25,52,.76);--line:rgba(105,220,255,.22);--accent:#24d8f2;background:radial-gradient(circle at 80% 16%,rgba(129,75,255,.3),transparent 32%),radial-gradient(circle at 16% 78%,rgba(0,222,255,.12),transparent 34%),linear-gradient(135deg,#050914,#0a1430)}
@@ -58,22 +80,24 @@ public static class PresentationHtmlExporter
                 .theme-neural .kicker{color:#65e8fa}.theme-cinematic .kicker{color:#ffbf78}.theme-gold .kicker{color:#e8ca85}.theme-blueprint .kicker{color:#8acbff}.theme-story .kicker{color:#9c5d36}.theme-universe .kicker{color:#bca3ff}
                 button{font:inherit;color:inherit}#toolbar{position:fixed;z-index:5;inset:0 0 auto;min-height:58px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 18px;border-bottom:1px solid var(--line);background:var(--panel);backdrop-filter:blur(14px)}
                 #deck-title{max-width:28vw;overflow:hidden;font-size:13px;font-weight:750;text-overflow:ellipsis;white-space:nowrap}#controls{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
-                .control{min-height:34px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);cursor:pointer;font-size:11px}.control:hover,.control:focus-visible{outline:2px solid #477cf4;outline-offset:1px}
-                #stage{min-height:100vh;padding:90px 8vw 92px;display:grid;place-items:center}.slide{position:relative;width:min(1120px,100%);min-height:min(72vh,720px);display:flex;flex-direction:column;justify-content:center;padding:clamp(28px,6vw,82px);overflow:hidden;border:1px solid var(--line);border-radius:22px;background:var(--panel);box-shadow:0 28px 80px rgba(20,43,82,.12);animation:enter .35s ease both}
-                .slide:before{content:"";position:absolute;inset:0 auto 0 0;width:8px;background:linear-gradient(var(--fg),var(--accent))}.slide:after{content:"";position:absolute;z-index:0;width:36vw;height:36vw;right:-20vw;top:-25vw;border:1px solid var(--line);border-radius:50%;box-shadow:0 0 0 44px rgba(37,99,235,.025),0 0 0 88px rgba(255,201,40,.035);pointer-events:none}
-                .slide.hero h1{max-width:1000px;font-size:clamp(48px,8vw,104px)}.slide.hero .subtitle{font-size:clamp(19px,2.4vw,30px)}.slide.workflow #points,.slide.blueprint #points{grid-template-columns:1fr}.slide.conclusion{border-color:var(--accent);box-shadow:0 28px 90px rgba(0,0,0,.2)}
+                .control{min-height:34px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);cursor:pointer;font-size:11px}.control:hover,.control:focus-visible{outline:2px solid #477cf4;outline-offset:1px}#more-menu{position:relative}#more-menu summary{display:grid;align-items:center;list-style:none}#more-menu summary::-webkit-details-marker{display:none}.menu-items{position:absolute;z-index:8;top:42px;right:0;display:grid;min-width:150px;gap:5px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--bg);box-shadow:0 12px 35px rgba(0,0,0,.18)}.menu-items .control{text-align:left}
+                #stage{min-height:100vh;padding:90px 8vw 92px;display:grid;place-items:center}                .slide{position:relative;width:min(1120px,100%,calc((100dvh - 156px)*16/9));aspect-ratio:16/9;display:flex;flex-direction:column;justify-content:center;padding:clamp(24px,4vw,64px);overflow:hidden;border:1px solid var(--line);border-radius:22px;background:var(--slide-bg,var(--panel));color:var(--slide-text,var(--fg));box-shadow:0 28px 80px rgba(20,43,82,.12);animation:enter .35s ease both}
+                .slide.standard{aspect-ratio:4/3;width:min(100%,calc((100dvh - 156px)*4/3))}.slide h1,.slide .subtitle,.slide .point,.visual{overflow-wrap:anywhere}.slide:before{content:"";position:absolute;inset:0 auto 0 0;width:8px;background:linear-gradient(var(--slide-text,var(--fg)),var(--slide-accent,var(--accent)))}.slide:after{content:"";position:absolute;z-index:0;width:36vw;height:36vw;right:-20vw;top:-25vw;border:1px solid var(--line);border-radius:50%;box-shadow:0 0 0 44px rgba(37,99,235,.025),0 0 0 88px rgba(255,201,40,.035);pointer-events:none}
+                .slide.hero h1{max-width:1000px;font-size:clamp(32px,5vw,72px)}.slide.hero .subtitle{font-size:clamp(19px,2.4vw,30px)}.slide.workflow #points,.slide.blueprint #points,.slide.roadmap #points{grid-template-columns:1fr}.slide.dashboard #visuals{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}.slide.comparison #points{grid-template-columns:repeat(2,minmax(0,1fr))}.slide.conclusion{border-color:var(--accent);box-shadow:0 28px 90px rgba(0,0,0,.2)}
                 .sources{margin-top:16px;color:var(--muted);font-size:10px;line-height:1.55}.sources strong{display:block;margin-bottom:4px;color:var(--fg)}
                 .slide>*{position:relative;z-index:1}.kicker{margin:0 0 18px;color:#2563eb;font-size:11px;font-weight:800;letter-spacing:.13em;text-transform:uppercase}.dark .kicker{color:#8dbbff}
-                h1{max-width:950px;margin:0;font-size:clamp(36px,6.2vw,78px);line-height:1.02;letter-spacing:-.045em}h2{font-size:clamp(21px,3vw,34px)}.subtitle{max-width:780px;margin:18px 0 28px;color:var(--muted);font-size:clamp(16px,2vw,23px);line-height:1.5}
-                #points{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px 26px;max-width:920px;margin-top:22px}.point{display:flex;align-items:flex-start;gap:12px;padding:12px 0;color:var(--fg);font-size:clamp(14px,1.5vw,19px);line-height:1.5;opacity:0;transform:translateY(8px);transition:opacity .32s ease,transform .32s ease}.point.visible{opacity:1;transform:none}.point:before{content:"";flex:0 0 9px;width:9px;height:9px;margin-top:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 5px rgba(255,201,40,.15)}
-                #visuals{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-top:26px}.visual{padding:15px;border:1px solid var(--line);border-radius:13px;background:var(--panel)}.visual small{display:block;color:var(--muted);font-size:10px}.visual strong{display:block;margin-top:7px;font-size:20px;overflow-wrap:anywhere}
-                #diagram,#chart{margin-top:22px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}#diagram-title,#chart-title{font-size:12px;font-weight:750}.flow{display:flex;align-items:center;gap:10px;overflow:auto;padding:16px 2px}.node{flex:0 0 auto;max-width:220px;padding:12px 16px;border:1px solid var(--line);border-radius:12px;background:var(--panel);font-size:12px;text-align:center}.arrow{color:#2563eb;font-size:22px}.chart-row{display:grid;grid-template-columns:minmax(70px,150px) minmax(40px,1fr) 42px;align-items:center;gap:8px;margin:9px 0;font-size:11px}.chart-bar{height:13px;border-radius:9px;background:linear-gradient(90deg,#2563eb,var(--accent));min-width:2px}
+                h1{max-width:950px;margin:0;font-size:calc(clamp(36px,6.2vw,78px)*var(--content-scale,1));line-height:1.02;letter-spacing:-.045em}h2{font-size:clamp(21px,3vw,34px)}.subtitle{max-width:780px;margin:18px 0 28px;color:var(--muted);font-size:calc(clamp(16px,2vw,23px)*var(--content-scale,1));line-height:1.5}
+                #points{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--slide-spacing,14px) 26px;max-width:920px;margin-top:22px}#points .point{display:flex;align-items:flex-start;gap:12px;padding:12px 0;color:inherit;font-size:calc(clamp(14px,1.5vw,19px)*var(--content-scale,1));line-height:1.5;opacity:0;transform:translateY(8px);transition:opacity .32s ease,transform .32s ease}#points .point.visible{opacity:1;transform:none}#points .point:before{content:"";flex:0 0 9px;width:9px;height:9px;margin-top:8px;border-radius:50%;background:var(--slide-accent,var(--accent));box-shadow:0 0 0 5px rgba(255,201,40,.15)}.slide[data-align="center"] #points .point{justify-content:center;text-align:center}.slide[data-align="right"] #points .point{justify-content:flex-end;text-align:right}
+                #visuals{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-top:26px}.visual{padding:15px;border:1px solid var(--line);border-radius:13px;background:var(--panel)}.visual small{display:block;color:var(--muted);font-size:10px}.visual strong{display:block;margin-top:7px;font-size:20px;overflow-wrap:anywhere}.visual-icon{display:inline-grid;width:34px;height:34px;place-items:center;margin-bottom:8px;border-radius:10px;background:linear-gradient(145deg,#008ff5,#00cbe8);color:#fff;font-size:17px;font-weight:800}
+                .slide-image{position:relative;z-index:1;display:block;max-width:min(100%,520px);max-height:24vh;object-fit:contain;border-radius:12px}
+                #diagram,#chart,.data-table{margin-top:22px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}#diagram-title,#chart-title{font-size:12px;font-weight:750}.diagram-scroll{max-width:100%;max-height:45vh;overflow:auto}.diagram-svg{display:block;overflow:visible}.diagram-controls{display:flex;align-items:center;gap:5px;margin:0 0 6px;color:var(--muted);font-size:10px}.diagram-controls span{margin-right:auto}.diagram-controls button{padding:3px 7px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg);cursor:pointer}.chart-svg{display:block;width:100%;max-height:390px;overflow:visible}.diagram-edge{fill:none;stroke:#7690b2;stroke-width:2}.diagram-node rect,.diagram-node polygon,.diagram-node ellipse{fill:var(--bg);stroke:#4779c7;stroke-width:2}.diagram-node text{fill:var(--fg);font:600 13px "Segoe UI",sans-serif;text-anchor:middle;dominant-baseline:middle}.diagram-edge-label{fill:var(--fg);font:600 11px "Segoe UI",sans-serif;text-anchor:middle;paint-order:stroke;stroke:var(--bg);stroke-width:5px;stroke-linejoin:round}.diagram-fallback{color:var(--muted);font-size:12px}.chart-svg line{stroke:var(--line)}.chart-svg .bar{fill:#2563eb}.chart-svg .line-series{fill:none;stroke:#2563eb;stroke-width:4;stroke-linejoin:round}.chart-svg .point{fill:var(--accent);stroke:var(--bg);stroke-width:2}.chart-svg text{fill:var(--muted);font:11px "Segoe UI",sans-serif;text-anchor:middle}.chart-svg .value{fill:var(--fg);font-weight:700}.donut-label{display:flex;justify-content:space-between;gap:12px;margin:5px 0;color:var(--muted);font-size:11px}.donut-legend{display:inline-block;width:8px;height:8px;margin-right:7px;border-radius:50%}.data-table{max-width:100%;overflow:auto}.data-table table{width:100%;border-collapse:collapse;font-size:11px}.data-table th,.data-table td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left}.data-table th{color:var(--fg);background:rgba(37,99,235,.1)}
                 #footer{position:fixed;z-index:4;inset:auto 0 0;display:flex;align-items:center;justify-content:center;gap:10px;min-height:64px;padding:10px 16px;background:var(--panel);border-top:1px solid var(--line);backdrop-filter:blur(14px)}#progress{width:min(420px,35vw);height:4px;overflow:hidden;border-radius:9px;background:var(--line)}#progress i{display:block;width:0;height:100%;background:var(--accent);transition:width .25s ease}#position{min-width:58px;text-align:center;color:var(--muted);font-size:11px}
+                .theme-prism #footer{border-color:var(--line);background:var(--dd-header-gradient);color:var(--dd-card)}.theme-prism #position{color:var(--dd-card)}.theme-prism .menu-items{background:var(--dd-navy)}.theme-prism .control[aria-pressed="true"]{border-color:var(--cyan)}.theme-prism #progress i{background:linear-gradient(90deg,#008ff5,#00cbe8)}
                 #overlay{position:fixed;z-index:8;inset:72px 18px 76px auto;width:min(520px,calc(100vw - 36px));padding:16px;overflow:auto;border:1px solid var(--line);border-radius:16px;background:var(--bg);box-shadow:0 20px 70px rgba(0,0,0,.2)}#overlay[hidden]{display:none}.overview-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.overview-item{padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);text-align:left;cursor:pointer}.overview-item strong{display:block;margin-top:5px;font-size:12px}.notes{color:var(--muted);font-size:14px;line-height:1.7;white-space:pre-wrap}
                 body.scroll-mode{scroll-snap-type:y mandatory}body.scroll-mode #stage{display:block;padding:58px 8vw 0}body.scroll-mode .slide{width:min(1120px,100%);min-height:calc(100vh - 122px);margin:26px auto;scroll-snap-align:start}
                 body.presentation #toolbar{opacity:.08;transition:opacity .2s}body.presentation #toolbar:hover,body.presentation #toolbar:focus-within{opacity:1}
                 @keyframes enter{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
-                @media(max-width:700px){#toolbar{align-items:flex-start;flex-direction:column;padding:8px 12px}#deck-title{max-width:90vw}#controls{justify-content:flex-start}.control{min-height:30px;padding:0 8px;font-size:10px}#stage{padding:138px 14px 82px}.slide{min-height:calc(100vh - 225px);padding:30px 24px}#points{grid-template-columns:1fr;gap:4px}#footer{min-height:54px}.timer-label{display:none}.slide:after{width:80vw;height:80vw}}
+                @media(max-width:700px){#toolbar{align-items:flex-start;flex-direction:column;padding:8px 12px}#deck-title{max-width:90vw}#controls{justify-content:flex-start}.control{min-height:30px;padding:0 8px;font-size:10px}#stage{padding:138px 14px 82px}.slide,.slide.standard{width:100%;min-height:calc(100vh - 225px);padding:30px 24px}#points,.slide.comparison #points{grid-template-columns:1fr;gap:4px}#footer{min-height:54px}.timer-label{display:none}.slide:after{width:80vw;height:80vw}}
                 @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
               </style>
             </head>
@@ -81,7 +105,8 @@ public static class PresentationHtmlExporter
               <header id="toolbar">
                 <div id="deck-title"></div>
                 <nav id="controls" aria-label="Presentation controls">
-                  <button class="control" id="start">Start</button><button class="control" id="prev" aria-label="Previous">←</button><button class="control" id="next" aria-label="Next">Next →</button><button class="control" id="fullscreen">Full screen</button><button class="control" id="overview-toggle">Overview</button><button class="control" id="notes-toggle">Notes</button><button class="control" id="timer-toggle">Timer</button><button class="control" id="theme">Theme</button><button class="control" id="mode">Scroll mode</button><button class="control" id="help">Help</button><button class="control" id="restart">Restart</button>
+                  <button class="control" id="start">Start</button><button class="control" id="fullscreen">Full screen</button><button class="control" id="theme">Theme</button>
+                  <details id="more-menu"><summary class="control">More</summary><div class="menu-items"><button class="control" id="overview-toggle">Overview</button><button class="control" id="notes-toggle">Speaker notes</button><button class="control" id="timer-toggle">Timer</button><button class="control" id="reveal" aria-pressed="false">Progressive reveal</button><button class="control" id="mode">Scroll mode</button><button class="control" id="help">Keyboard help</button><button class="control" id="restart">Restart</button></div></details>
                 </nav>
               </header>
               <main id="stage" aria-live="polite"></main>
@@ -93,11 +118,12 @@ public static class PresentationHtmlExporter
                 const data=JSON.parse(document.getElementById("presentation-data").textContent);
                 const slides=Array.isArray(data.slides)?data.slides:[];
                 const stage=document.getElementById("stage"),overlay=document.getElementById("overlay");
+                let diagramSequence=0;
                 const title=document.getElementById("deck-title"),pos=document.getElementById("position"),bar=document.querySelector("#progress i"),clock=document.getElementById("timer-label");
                 title.textContent=data.title||"Interactive presentation";document.title=title.textContent;
-                const themeKeys=["neural","cinematic","gold","blueprint","story","universe","default"];
+                const themeKeys=["prism","neural","cinematic","gold","blueprint","story","universe","default"];
                 let activeTheme=themeKeys.includes(data.themeKey)?data.themeKey:"default";
-                let index=0,revealed=0,seconds=0,timer=null,dark=(data.theme||"").toLowerCase().includes("dark");
+                let progressive=false,index=0,revealed=0,seconds=0,timer=null,dark=(data.theme||"").toLowerCase().includes("dark");
                 document.body.classList.add("theme-"+activeTheme);
                 if(dark)document.body.classList.add("dark");
                 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=String(text);return n};
@@ -105,20 +131,34 @@ public static class PresentationHtmlExporter
                 const displayTime=n=>`${Math.floor(n/60)}:${String(n%60).padStart(2,"0")}`;
                 function createSlide(s,i,revealCount){
                   const article=el("article","slide");
-                  const layouts={title:"hero",hero:"hero",executivesummary:"hero",workflow:"workflow",architecturediagram:"blueprint",blueprint:"blueprint",conclusion:"conclusion"};
+                  article.classList.toggle("standard",data.aspectRatio==="4:3");
+                  const layouts={title:"hero",hero:"hero",executivesummary:"hero",problem:"comparison",problemandsolution:"comparison",comparison:"comparison",comparisonmatrix:"comparison",businessecosystem:"comparison",kpidashboard:"dashboard",dashboard:"dashboard",insight:"dashboard",capacityallocation:"dashboard",allocation:"dashboard",workflow:"workflow",decisiontree:"workflow",swimlane:"workflow",sequencediagram:"workflow",userjourney:"workflow",architecturediagram:"blueprint",blueprint:"blueprint",dataflow:"blueprint",integrationarchitecture:"blueprint",securityarchitecture:"blueprint",technologystack:"blueprint",roadmap:"roadmap",timeline:"roadmap",implementationroadmap:"roadmap",barchart:"dashboard",linechart:"dashboard",donutchart:"dashboard",funnelchart:"dashboard",riskmitigation:"comparison",riskassessment:"comparison",conclusion:"conclusion"};
                   article.classList.add(layouts[String(s.layoutType||"").toLowerCase()]||"story");
+                  applySlideStyle(article,s);
                   addText(article,"p","kicker",`${s.layoutType||"Story"} · ${String(i+1).padStart(2,"0")}`);
                   addText(article,"h1","",s.title||"Untitled section");
                   if(s.subtitle)addText(article,"p","subtitle",s.subtitle);
+                  if(typeof s.imageDataUrl==="string"&&/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+=*$/.test(s.imageDataUrl)){const image=el("img","slide-image");image.src=s.imageDataUrl;image.alt=s.title||"Presentation image";article.appendChild(image)}
                   const points=el("div","");points.id="points";
                   (Array.isArray(s.content)?s.content:[]).forEach((value,j)=>{const p=addText(points,"p","point",value);if(j<revealCount)p.classList.add("visible")});
                   article.appendChild(points);
-                  if(Array.isArray(s.visualElements)&&s.visualElements.length){const visual=el("div","");visual.id="visuals";s.visualElements.forEach(item=>{const box=el("div","visual");addText(box,"small","",item.label||"");addText(box,"strong","",item.value||"");visual.appendChild(box)});article.appendChild(visual)}
+                  if(Array.isArray(s.visualElements)&&s.visualElements.length){const visual=el("div","");visual.id="visuals";s.visualElements.forEach(item=>{const box=el("div","visual");if(item.type==="Icon"){addText(box,"span","visual-icon",item.value||"✦");addText(box,"small","",item.label||"")}else{addText(box,"small","",item.label||"");addText(box,"strong","",item.value||"")}visual.appendChild(box)});article.appendChild(visual)}
                   if(s.diagram&&typeof s.diagram.mermaid==="string")renderDiagram(article,s.diagram);
                   if(s.chart&&Array.isArray(s.chart.labels)&&Array.isArray(s.chart.values))renderChart(article,s.chart);
+                  if(s.table&&Array.isArray(s.table.headers)&&Array.isArray(s.table.rows))renderTable(article,s.table);
                   if(Array.isArray(s.sourceReferences)&&s.sourceReferences.length){const refs=el("div","sources");addText(refs,"strong","","Source references");s.sourceReferences.slice(0,10).forEach(ref=>addText(refs,"span","",ref));article.appendChild(refs)}
                   addText(article,"small","","Section "+(i+1)+" of "+slides.length);
                   return article
+                }
+                function applySlideStyle(article,s){
+                  const fonts=["Aptos","Arial","Calibri","Georgia","Inter","Noto Sans Tamil","Segoe UI","Verdana"];
+                  if(fonts.includes(s.fontFamily))article.style.fontFamily=`"${s.fontFamily}",var(--dd-font)`;
+                  for(const [key,value] of [["--slide-bg",s.backgroundColor],["--slide-text",s.textColor],["--slide-accent",s.accentColor]]){
+                    if(typeof value==="string"&&/^#[0-9a-fA-F]{6}$/.test(value))article.style.setProperty(key,value)
+                  }
+                  const scale=Number(s.contentScale);                  if(Number.isFinite(scale)&&scale>=.75&&scale<=1.5)article.style.setProperty("--content-scale",String(scale));
+                  if(["Left","Center","Right"].includes(s.contentAlignment))article.dataset.align=s.contentAlignment.toLowerCase();
+                  const spacing=Number(s.contentSpacing);if(Number.isFinite(spacing)&&spacing>=4&&spacing<=40)article.style.setProperty("--slide-spacing",`${spacing}px`)
                 }
                 function render(){
                   stage.replaceChildren();overlay.hidden=true;
@@ -126,38 +166,113 @@ public static class PresentationHtmlExporter
                   if(document.body.classList.contains("scroll-mode")){
                     slides.forEach((s,i)=>stage.appendChild(createSlide(s,i,(s.content||[]).length)));
                     stage.querySelectorAll(".slide")[index]?.scrollIntoView({block:"start",behavior:"smooth"});
-                  }else stage.appendChild(createSlide(slides[index]||{},index,revealed));
+                  }else stage.appendChild(createSlide(slides[index]||{},index,progressive?revealed:Infinity));
                   pos.textContent=`${index+1} / ${slides.length}`;
                   bar.style.width=`${((index+1)/slides.length)*100}%`;
                 }
                 function renderDiagram(parent,diagram){
                   const box=el("section","");box.id="diagram";addText(box,"div","","Architecture / workflow");
-                  const flow=el("div","flow"),source=diagram.mermaid.split(/\r?\n/).slice(1);
-                  const labels=[],seen=new Set();
-                  for(const line of source){const re=/([A-Za-z0-9_-]+)\s*\[([^\]]+)\]/g;let match;while((match=re.exec(line))){if(!seen.has(match[1])){seen.add(match[1]);labels.push(match[2])}}}
-                  if(labels.length>0&&labels.length<=16){labels.forEach((label,i)=>{if(i)flow.appendChild(el("span","arrow","→"));flow.appendChild(el("div","node",label))})}
-                  else flow.appendChild(el("div","node",diagram.type||"Diagram"));
-                  box.appendChild(flow);const details=document.createElement("details");addText(details,"summary","","View diagram source");addText(details,"pre","",diagram.mermaid);box.appendChild(details);parent.appendChild(box)
+                  const source=String(diagram.mermaid||""),nodes=new Map(),edges=[];
+                  const nodePattern=/([A-Za-z0-9_-]+)\s*(\[\[[^\]]+\]\]|\[[^\]]+\]|\{\{[^}]+\}\}|\{[^}]+\}|\(\([^)]+\)\)|\(\[[^\]]+\]\)|\([^)]*\))?/g;
+                  const edgePattern=/(-->|---|-.->|==>|--o|--x)(?:\|([^|]*)\|)?/g;
+                  for(const line of source.split(/\r?\n/)){
+                    const trimmed=line.trim();
+                    if(!trimmed||trimmed.startsWith("%%")||/^(flowchart|graph)\s/i.test(trimmed)||/^(subgraph|end|classDef|style|linkStyle|click)\b/i.test(trimmed))continue;
+                    const tokens=[];let offset=0;
+                    while(offset<trimmed.length){
+                      edgePattern.lastIndex=offset;nodePattern.lastIndex=offset;
+                      const edge=edgePattern.exec(trimmed),node=nodePattern.exec(trimmed);
+                      if(!edge&&!node)break;
+                      if(edge&&(!node||edge.index<=node.index)){tokens.push({kind:"edge",label:edge[2]||""});offset=edgePattern.lastIndex}
+                      else if(node){
+                        const raw=node[2]||"",label=raw.startsWith("{{")||raw.startsWith("[[")||raw.startsWith("((")||raw.startsWith("([")?raw.slice(2,-2):raw.startsWith("[")||raw.startsWith("{")||raw.startsWith("(")?raw.slice(1,-1):node[1];
+                        if(!nodes.has(node[1])||Boolean(node[2]))nodes.set(node[1],{id:node[1],label:label.replace(/<br\s*\/?>/gi," ").trim()||node[1],shape:raw.startsWith("{")?"diamond":raw.startsWith("((")?"circle":raw.startsWith("(")?"round":"rect"});
+                        tokens.push({kind:"node",id:node[1]});offset=nodePattern.lastIndex
+                      }
+                    }
+                    for(let i=0;i<tokens.length-2;i++){if(tokens[i].kind==="node"&&tokens[i+1].kind==="edge"&&tokens[i+2].kind==="node")edges.push({from:tokens[i].id,to:tokens[i+2].id,label:tokens[i+1].label})}
+                  }
+                  if(!nodes.size){
+                    addText(box,"p","diagram-fallback","This diagram syntax is not supported by the offline renderer. The original source is available below.");
+                  }else{
+                    const direction=(source.match(/\b(?:flowchart|graph)\s+(LR|RL|TB|TD|BT)\b/i)||[])[1]?.toUpperCase()||"TD",horizontal=direction==="LR"||direction==="RL",reverse=direction==="RL"||direction==="BT";
+                    const outgoing=new Map([...nodes.keys()].map(id=>[id,[]])),indegree=new Map([...nodes.keys()].map(id=>[id,0]));
+                    edges.forEach(edge=>{if(outgoing.has(edge.from)&&indegree.has(edge.to)){outgoing.get(edge.from).push(edge.to);indegree.set(edge.to,indegree.get(edge.to)+1)}});
+                    const rank=new Map(),queue=[...nodes.keys()].filter(id=>indegree.get(id)===0);
+                    queue.forEach(id=>rank.set(id,0));if(!queue.length){queue.push(nodes.keys().next().value);rank.set(queue[0],0)}
+                    for(let i=0;i<queue.length;i++)for(const target of outgoing.get(queue[i])||[]){if(!rank.has(target)){rank.set(target,rank.get(queue[i])+1);queue.push(target)}}
+                    nodes.forEach((node,id)=>{if(!rank.has(id))rank.set(id,0)});
+                    const groups=new Map();nodes.forEach((node,id)=>{const r=rank.get(id);groups.set(r,[...(groups.get(r)||[]),id])});
+                    const maxRank=Math.max(0,...groups.keys()),maxCount=Math.max(1,...[...groups.values()].map(group=>group.length));
+                    const width=horizontal?Math.max(900,(maxRank+1)*250+100):Math.max(900,maxCount*220+100),height=horizontal?Math.max(360,maxCount*110+100):Math.max(360,(maxRank+1)*125+100);
+                    const sequence=++diagramSequence,svgNs="http://www.w3.org/2000/svg",svg=document.createElementNS(svgNs,"svg");svg.setAttribute("class","diagram-svg");svg.setAttribute("viewBox",`0 0 ${width} ${height}`);svg.setAttribute("width",width);svg.setAttribute("height",height);svg.setAttribute("role","img");svg.setAttribute("aria-label",`Branching diagram with ${nodes.size} nodes`);
+                    const defs=document.createElementNS(svgNs,"defs"),marker=document.createElementNS(svgNs,"marker");marker.setAttribute("id",`diagram-arrow-${sequence}`);marker.setAttribute("markerWidth","8");marker.setAttribute("markerHeight","8");marker.setAttribute("refX","7");marker.setAttribute("refY","4");marker.setAttribute("orient","auto");
+                    const arrow=document.createElementNS(svgNs,"path");arrow.setAttribute("d","M0,0 L8,4 L0,8 Z");marker.appendChild(arrow);defs.appendChild(marker);svg.appendChild(defs);
+                    const positions=new Map();nodes.forEach((node,id)=>{const r=rank.get(id),group=groups.get(r),place=group.indexOf(id),primary=60+(reverse?maxRank-r:r)*250;positions.set(id,{...node,x:horizontal?primary:60+(width-120)*(place+1)/(group.length+1),y:horizontal?55+place*110:60+(reverse?maxRank-r:r)*125})});
+                    edges.forEach(edge=>{const from=positions.get(edge.from),to=positions.get(edge.to);if(!from||!to)return;
+                      const sx=horizontal?from.x+(reverse?-90:90):from.x,sy=horizontal?from.y:from.y+(reverse?-31:31),ex=horizontal?to.x+(reverse?90:-90):to.x,ey=horizontal?to.y:to.y+(reverse?31:-31),mx=(sx+ex)/2,my=(sy+ey)/2;
+                      const path=document.createElementNS(svgNs,"path");path.setAttribute("class","diagram-edge");path.setAttribute("marker-end",`url(#diagram-arrow-${sequence})`);path.setAttribute("d",horizontal?`M${sx} ${sy} C${mx} ${sy},${mx} ${ey},${ex} ${ey}`:`M${sx} ${sy} C${sx} ${my},${ex} ${my},${ex} ${ey}`);svg.appendChild(path);
+                      if(edge.label){const text=document.createElementNS(svgNs,"text");text.setAttribute("class","diagram-edge-label");text.setAttribute("x",mx);text.setAttribute("y",my-7);text.textContent=edge.label;svg.appendChild(text)}
+                    });
+                    positions.forEach(node=>{const group=document.createElementNS(svgNs,"g");group.setAttribute("class","diagram-node");const title=document.createElementNS(svgNs,"title");title.textContent=node.label;group.appendChild(title);
+                      let shape;if(node.shape==="diamond"){shape=document.createElementNS(svgNs,"polygon");shape.setAttribute("points",`${node.x},${node.y-31} ${node.x+90},${node.y} ${node.x},${node.y+31} ${node.x-90},${node.y}`)}
+                      else if(node.shape==="circle"){shape=document.createElementNS(svgNs,"ellipse");shape.setAttribute("cx",node.x);shape.setAttribute("cy",node.y);shape.setAttribute("rx","66");shape.setAttribute("ry","31")}
+                      else{shape=document.createElementNS(svgNs,"rect");shape.setAttribute("x",node.x-90);shape.setAttribute("y",node.y-31);shape.setAttribute("width","180");shape.setAttribute("height","62");shape.setAttribute("rx",node.shape==="round"?"24":"10")}
+                      group.appendChild(shape);const text=document.createElementNS(svgNs,"text");text.setAttribute("x",node.x);text.setAttribute("y",node.y);text.textContent=node.label;group.appendChild(text);svg.appendChild(group)
+                    });
+                    const controls=el("div","diagram-controls"),hint=addText(controls,"span","","Scroll to pan"),out=addText(controls,"button","","−"),reset=addText(controls,"button","","Reset"),inside=addText(controls,"button","","+");
+                    out.type=reset.type=inside.type="button";out.setAttribute("aria-label","Zoom out diagram");inside.setAttribute("aria-label","Zoom in diagram");
+                    const viewport=el("div","diagram-scroll"),baseWidth=width,baseHeight=height;let zoom=1;
+                    const applyZoom=()=>{const fit=Math.min(1,(viewport.clientWidth||baseWidth)/baseWidth,(window.innerHeight*.42)/baseHeight);const scale=Math.max(.48,fit)*zoom;svg.setAttribute("width",String(baseWidth*scale));svg.setAttribute("height",String(baseHeight*scale))};
+                    out.addEventListener("click",()=>{zoom=Math.max(.6,zoom-.2);applyZoom()});inside.addEventListener("click",()=>{zoom=Math.min(2,zoom+.2);applyZoom()});reset.addEventListener("click",()=>{zoom=1;applyZoom()});
+                    viewport.appendChild(svg);requestAnimationFrame(applyZoom);box.append(controls,viewport)
+                  }
+                  const details=document.createElement("details");addText(details,"summary","","View diagram source");addText(details,"pre","",source);box.appendChild(details);parent.appendChild(box)
                 }
                 function renderChart(parent,chart){
                   const rows=chart.labels.map((label,i)=>({label,value:Number(chart.values[i])})).filter(x=>Number.isFinite(x.value));
                   if(!rows.length||rows.length>20)return;
                   const box=el("section","");box.id="chart";addText(box,"div","","Source-provided chart · "+(chart.type||"Data"));
-                  const max=Math.max(1,...rows.map(x=>Math.max(0,x.value)));
-                  rows.forEach(row=>{const line=el("div","chart-row");addText(line,"span","",row.label);const bar=el("div","chart-bar");bar.style.width=`${Math.max(2,Math.max(0,row.value)/max*100)}%`;line.appendChild(bar);addText(line,"strong","",row.value);box.appendChild(line)});
+                  const svgNs="http://www.w3.org/2000/svg",svg=document.createElementNS(svgNs,"svg");svg.setAttribute("class","chart-svg");svg.setAttribute("viewBox","0 0 720 250");svg.setAttribute("role","img");svg.setAttribute("aria-label",`${chart.type||"Data"} chart`);
+                  const type=String(chart.type||"").toLowerCase(),colors=["#008ff5","#00cbe8","#00b5b8","#ffb547","#ff5349","#0756b5"];
+                  if(type.includes("donut")||type.includes("doughnut")||type.includes("pie")){
+                    const total=rows.reduce((sum,row)=>sum+Math.max(0,row.value),0),circ=2*Math.PI*62;let offset=0;
+                    rows.forEach((row,i)=>{const circle=document.createElementNS(svgNs,"circle");circle.setAttribute("cx","125");circle.setAttribute("cy","125");circle.setAttribute("r","62");circle.setAttribute("fill","none");circle.setAttribute("stroke",colors[i%colors.length]);circle.setAttribute("stroke-width","24");const part=total?circ*Math.max(0,row.value)/total:0;circle.setAttribute("stroke-dasharray",`${part} ${circ-part}`);circle.setAttribute("stroke-dashoffset",String(-offset));offset+=part;circle.setAttribute("transform","rotate(-90 125 125)");svg.appendChild(circle);
+                      const legend=el("div","donut-label"),swatch=el("i","donut-legend");swatch.style.background=colors[i%colors.length];legend.appendChild(swatch);addText(legend,"span","",row.label);addText(legend,"strong","",String(row.value));box.appendChild(legend)});
+                    const center=document.createElementNS(svgNs,"text");center.setAttribute("x","125");center.setAttribute("y","130");center.setAttribute("class","value");center.textContent=String(total);svg.appendChild(center)
+                  }else{
+                    const max=Math.max(1,...rows.map(row=>Math.max(0,row.value))),step=620/rows.length,points=rows.map((row,i)=>({x:65+step*(i+.5),y:198-Math.max(0,row.value)/max*165,row}));
+                    const axis=document.createElementNS(svgNs,"line");axis.setAttribute("x1","52");axis.setAttribute("y1","206");axis.setAttribute("x2","700");axis.setAttribute("y2","206");svg.appendChild(axis);
+                    if(type.includes("line")||type.includes("trend")){
+                      const line=document.createElementNS(svgNs,"polyline");line.setAttribute("class","line-series");line.setAttribute("points",points.map(point=>`${point.x},${point.y}`).join(" "));svg.appendChild(line);
+                      points.forEach(point=>{const dot=document.createElementNS(svgNs,"circle");dot.setAttribute("class","point");dot.setAttribute("cx",point.x);dot.setAttribute("cy",point.y);dot.setAttribute("r","5");svg.appendChild(dot)})
+                    }else points.forEach(point=>{const rect=document.createElementNS(svgNs,"rect");rect.setAttribute("class","bar");rect.setAttribute("x",point.x-20);rect.setAttribute("y",point.y);rect.setAttribute("width","40");rect.setAttribute("height",206-point.y);rect.setAttribute("rx","5");svg.appendChild(rect);
+                      const value=document.createElementNS(svgNs,"text");value.setAttribute("class","value");value.setAttribute("x",point.x);value.setAttribute("y",point.y-7);value.textContent=String(point.row.value);svg.appendChild(value)});
+                    points.forEach(point=>{const label=document.createElementNS(svgNs,"text");label.setAttribute("x",point.x);label.setAttribute("y","229");label.textContent=point.row.label;svg.appendChild(label)})
+                  }
+                  box.appendChild(svg);
                   parent.appendChild(box)
                 }
-                function next(){if(!document.body.classList.contains("scroll-mode")&&revealed<(slides[index]?.content||[]).length){revealed++;render();return}if(index<slides.length-1){index++;revealed=0;render()}}
-                function previous(){if(!document.body.classList.contains("scroll-mode")&&revealed>0){revealed--;render();return}if(index>0){index--;revealed=(slides[index]?.content||[]).length;render()}}
+                function renderTable(parent,table){
+                  const headers=table.headers.slice(0,8),rows=table.rows.slice(0,20).filter(row=>Array.isArray(row)&&row.length===headers.length);
+                  if(!headers.length)return;
+                  const box=el("section","data-table"),scroll=el("div","diagram-scroll"),element=document.createElement("table"),head=document.createElement("thead"),headRow=document.createElement("tr");
+                  headers.forEach(value=>addText(headRow,"th","",value));head.appendChild(headRow);element.appendChild(head);
+                  const body=document.createElement("tbody");rows.forEach(row=>{const tr=document.createElement("tr");row.forEach(value=>addText(tr,"td","",value));body.appendChild(tr)});
+                  element.appendChild(body);scroll.appendChild(element);box.appendChild(scroll);parent.appendChild(box)
+                }
+                function next(){if(progressive&&!document.body.classList.contains("scroll-mode")&&revealed<(slides[index]?.content||[]).length){revealed++;render();return}if(index<slides.length-1){index++;revealed=0;render()}}
+                function previous(){if(progressive&&!document.body.classList.contains("scroll-mode")&&revealed>0){revealed--;render();return}if(index>0){index--;revealed=(slides[index]?.content||[]).length;render()}}
                 function showOverview(){overlay.replaceChildren();addText(overlay,"h2","","Presentation overview");const grid=el("div","overview-grid");slides.forEach((s,i)=>{const b=el("button","overview-item");b.appendChild(el("span","",String(i+1)));b.appendChild(el("strong","",s.title||"Untitled"));b.addEventListener("click",()=>{index=i;revealed=0;render()});grid.appendChild(b)});overlay.appendChild(grid);overlay.hidden=false}
                 function showNotes(){overlay.replaceChildren();addText(overlay,"h2","","Presenter notes");addText(overlay,"p","notes",slides[index]?.speakerNotes||"No notes for this section.");overlay.hidden=false}
-                document.getElementById("prev").onclick=document.getElementById("footer-prev").onclick=previous;
-                document.getElementById("next").onclick=document.getElementById("footer-next").onclick=next;
+                document.getElementById("footer-prev").onclick=previous;
+                document.getElementById("footer-next").onclick=next;
                 document.getElementById("start").onclick=()=>{document.body.classList.add("presentation");document.documentElement.requestFullscreen?.().catch(()=>{})};
                 document.getElementById("fullscreen").onclick=()=>document.fullscreenElement?document.exitFullscreen?.():document.documentElement.requestFullscreen?.().catch(()=>{});
                 document.getElementById("overview-toggle").onclick=showOverview;document.getElementById("notes-toggle").onclick=showNotes;
                 document.getElementById("timer-toggle").onclick=e=>{if(timer){clearInterval(timer);timer=null;e.currentTarget.textContent="Timer"}else{timer=setInterval(()=>{seconds++;clock.textContent=displayTime(seconds)},1000);e.currentTarget.textContent="Pause timer"}};
                 document.getElementById("theme").onclick=()=>{document.body.classList.remove(...themeKeys.map(key=>"theme-"+key),"dark");activeTheme=themeKeys[(themeKeys.indexOf(activeTheme)+1)%themeKeys.length];document.body.classList.add("theme-"+activeTheme)};
+                document.getElementById("reveal").onclick=e=>{progressive=!progressive;revealed=0;e.currentTarget.setAttribute("aria-pressed",String(progressive));render()};
                 document.getElementById("mode").onclick=e=>{const on=document.body.classList.toggle("scroll-mode");e.currentTarget.textContent=on?"Linear mode":"Scroll mode";revealed=on?(slides[index]?.content||[]).length:0;render()};
                 document.getElementById("help").onclick=()=>{overlay.replaceChildren();addText(overlay,"h2","","Keyboard help");addText(overlay,"p","notes","Right/Space: reveal or next · Left: previous · F: full screen · O: overview · N: notes · Home/End: first/last · Escape: close panels");overlay.hidden=false};
                 document.getElementById("restart").onclick=()=>{index=0;revealed=0;seconds=0;clock.textContent="0:00";render()};
@@ -170,7 +285,9 @@ public static class PresentationHtmlExporter
               </script>
             </body>
             </html>
-            """.Replace("__PRESENTATION_DATA_JSON__", json, StringComparison.Ordinal);
+            """.Replace("__DOCUMENT_LANGUAGE__", GetLanguageTag(presentation.Language), StringComparison.Ordinal)
+                .Replace("__PRISM_STYLES__", PrismStyles, StringComparison.Ordinal)
+                .Replace("__PRESENTATION_DATA_JSON__", json, StringComparison.Ordinal);
     }
 
     public static string SafeFileName(string title)
@@ -190,6 +307,17 @@ public static class PresentationHtmlExporter
         if (value.Contains("blueprint") || value.Contains("technology")) return "blueprint";
         if (value.Contains("universe")) return "universe";
         if (value.Contains("storytelling")) return "story";
+        if (value.Contains("prism")) return "prism";
         return "default";
     }
+
+    private static string GetLanguageTag(string? language) =>
+        (language ?? "").Trim().ToLowerInvariant() switch
+        {
+            "tamil" or "ta" => "ta",
+            "french" or "fr" => "fr",
+            "german" or "de" => "de",
+            "spanish" or "es" => "es",
+            _ => "en"
+        };
 }

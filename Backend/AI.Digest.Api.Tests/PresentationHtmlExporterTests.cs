@@ -79,6 +79,100 @@ public sealed class PresentationHtmlExporterTests
         Assert.Contains("connect-src 'none'", html);
     }
 
+    [Fact]
+    public void PrismBlueIsTheDefaultAndIsRenderedWithoutExternalAssets()
+    {
+        var presentation = new PresentationDocument
+        {
+            Language = "Tamil",
+            Slides =
+            [
+                new PresentationSlide
+                {
+                    SlideNumber = 1,
+                    Title = "தமிழ் மற்றும் enterprise",
+                    Content = ["Source-grounded content"]
+                }
+            ]
+        };
+
+        var html = PresentationHtmlExporter.Export(presentation);
+
+        Assert.Contains("\"themeKey\":\"prism\"", html);
+        Assert.Contains("<html lang=\"ta\">", html);
+        Assert.Contains("body.theme-prism", html);
+        Assert.Contains("Noto Sans Tamil", html);
+        Assert.Contains("connect-src 'none'", html);
+        Assert.DoesNotContain("__PRISM_STYLES__", html);
+        Assert.DoesNotContain("__DOCUMENT_LANGUAGE__", html);
+        Assert.DoesNotContain("<script src=", html);
+    }
+
+    [Fact]
+    public void OfflineRendererPreservesBranchingDiagramAndChartSemantics()
+    {
+        var presentation = new PresentationDocument
+        {
+            Slides =
+            [
+                new PresentationSlide
+                {
+                    SlideNumber = 1,
+                    Title = "Decision flow",
+                    LayoutType = "DecisionTree",
+                    Diagram = new PresentationDiagram
+                    {
+                        Type = "Workflow",
+                        Mermaid = "flowchart TD\n A[Start] --> B{Decision}\n B -->|Yes| C[Approve]\n B -->|No| D[Review]"
+                    },
+                    Chart = new PresentationChart
+                    {
+                        Type = "Donut",
+                        Labels = ["Approved", "Review"],
+                        Values = [7, 3]
+                    }
+                }
+            ]
+        };
+
+        var html = PresentationHtmlExporter.Export(presentation);
+
+        Assert.Contains("diagram-edge-label", html);
+        Assert.Contains("createElementNS(svgNs,\"polygon\")", html);
+        Assert.Contains("flowchart TD", html);
+        Assert.Contains("type.includes(\"donut\")", html);
+        Assert.Contains("stroke-dasharray", html);
+        Assert.Contains("diagram-controls", html);
+        Assert.DoesNotContain("labels.forEach((label,i)", html);
+    }
+
+    [Fact]
+    public void OfflineRendererIncludesPresentationTables()
+    {
+        var presentation = new PresentationDocument
+        {
+            Slides =
+            [
+                new PresentationSlide
+                {
+                    SlideNumber = 1,
+                    Title = "Delivery plan",
+                    Table = new PresentationTable
+                    {
+                        Headers = ["Phase", "Owner"],
+                        Rows = [["Plan", "Team A"]]
+                    }
+                }
+            ]
+        };
+
+        var html = PresentationHtmlExporter.Export(presentation);
+
+        Assert.Contains("function renderTable(parent,table)", html);
+        Assert.Contains("table.rows.slice(0,20)", html);
+        Assert.Contains("Team A", html);
+    }
+
     [Theory]
     [InlineData("Neural Intelligence", "\"themeKey\":\"neural\"")]
     [InlineData("Cinematic Product Launch", "\"themeKey\":\"cinematic\"")]

@@ -1,6 +1,7 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Presentation;
+using System.Text.RegularExpressions;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -14,6 +15,10 @@ namespace AI.Digest.Api.Services;
 public sealed class PresentationGenerationService
 {
     private sealed record ThemePalette(string Background, string Text, string Muted, string Accent, string Card);
+    private static readonly HashSet<string> SupportedFonts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Aptos", "Arial", "Calibri", "Georgia", "Inter", "Noto Sans Tamil", "Segoe UI", "Verdana"
+    };
 
     public Models.PresentationDocument Validate(Models.PresentationDocument presentation)
     {
@@ -28,9 +33,40 @@ public sealed class PresentationGenerationService
                 throw new AnalysisProviderException("Every slide must have a title.");
             if (slide.Content.Count > 5)
                 throw new AnalysisProviderException($"Slide '{slide.Title}' exceeds five content bullets.");
+            if (!SupportedFonts.Contains(slide.FontFamily) ||
+                !IsSafeColor(slide.BackgroundColor) ||
+                !IsSafeColor(slide.TextColor) ||
+                !IsSafeColor(slide.AccentColor) ||
+                slide.ContentScale is < 0.75 or > 1.5 ||
+                slide.ContentAlignment is not ("Left" or "Center" or "Right") ||
+                slide.ContentSpacing is < 4 or > 40)
+                throw new AnalysisProviderException(
+                    $"Slide '{slide.Title}' contains unsupported design settings.",
+                    failureCode: AnalysisFailureCode.InvalidInput);
+            if (slide.ImageDataUrl is { Length: > 1_500_000 } ||
+                (slide.ImageDataUrl is not null &&
+                 !Regex.IsMatch(slide.ImageDataUrl, @"^data:image/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+=*$")))
+                throw new AnalysisProviderException(
+                    $"Slide '{slide.Title}' contains an unsupported or oversized image.",
+                    failureCode: AnalysisFailureCode.InvalidInput);
+            if (slide.Table is not null &&
+                (slide.Table.Headers is null ||
+                 slide.Table.Rows is null ||
+                 slide.Table.Headers.Count is < 1 or > 8 ||
+                 slide.Table.Rows.Count > 20 ||
+                 slide.Table.Headers.Any(header => header is null || header.Length > 120) ||
+                 slide.Table.Rows.Any(row => row is null ||
+                     row.Count != slide.Table.Headers.Count ||
+                     row.Any(cell => cell is null || cell.Length > 300))))
+                throw new AnalysisProviderException(
+                    $"Slide '{slide.Title}' contains invalid table data.",
+                    failureCode: AnalysisFailureCode.InvalidInput);
         }
         return presentation;
     }
+
+    private static bool IsSafeColor(string color) =>
+        string.IsNullOrEmpty(color) || Regex.IsMatch(color, @"^#[0-9a-fA-F]{6}$");
 
     public byte[] GeneratePptx(Models.PresentationDocument presentation)
     {
@@ -293,6 +329,8 @@ public sealed class PresentationGenerationService
     private static ThemePalette GetPalette(string? theme)
     {
         var value = (theme ?? "").ToLowerInvariant();
+        if (value.Contains("prism"))
+            return new("F3F7FD", "10234D", "64748B", "00CBE8", "FFFFFF");
         if (value.Contains("neural") || value.Contains("dark"))
             return new("080D1B", "F4F8FF", "C1D0E7", "24D8F2", "111D38");
         if (value.Contains("cinematic"))
@@ -307,6 +345,6 @@ public sealed class PresentationGenerationService
             return new("FBF4E9", "2B2B30", "655A51", "9C5D36", "FFFFFF");
         if (value.Contains("light") || value.Contains("minimal"))
             return new("FFFFFF", "142B52", "64748B", "2563EB", "F4F7FC");
-        return new("F7F9FD", "142B52", "64748B", "FFC928", "F4F7FC");
+        return new("F3F7FD", "10234D", "64748B", "00CBE8", "FFFFFF");
     }
 }

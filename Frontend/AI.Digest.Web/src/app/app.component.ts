@@ -38,6 +38,9 @@ import {
 } from '@lucide/angular';
 import { EChartsOption } from 'echarts';
 import { NgxEchartsDirective } from 'ngx-echarts';
+import { PresentationChartComponent } from './presentation-chart.component';
+import { PresentationDiagramComponent } from './presentation-diagram.component';
+import { PresentationTableComponent } from './presentation-table.component';
 
 interface Evidence {
   statementId: string;
@@ -201,9 +204,18 @@ interface PresentationSlide {
   visualElements: { type: string; label: string; value: string }[];
   diagram?: { type: string; mermaid: string };
   chart?: { type: string; labels: string[]; values: number[] };
+  table?: { headers: string[]; rows: string[][] };
   screenshotReferences: string[];
   speakerNotes: string;
   sourceReferences: string[];
+  fontFamily: string;
+  backgroundColor: string;
+  textColor: string;
+  accentColor: string;
+  contentScale: number;
+  contentAlignment: string;
+  contentSpacing: number;
+  imageDataUrl?: string;
 }
 
 interface PresentationDocument {
@@ -214,6 +226,7 @@ interface PresentationDocument {
   sourceReference: string;
   targetAudience: string;
   theme: string;
+  language?: string;
   themeRecommendation?: string;
   aspectRatio: string;
   totalSlides: number;
@@ -222,6 +235,23 @@ interface PresentationDocument {
   aiModel: string;
   status: string;
   slides: PresentationSlide[];
+}
+
+interface PresentationEditProposal {
+  summary: string;
+  provider: string;
+  model: string;
+  presentation: PresentationDocument;
+}
+
+interface PresentationVersionSummary {
+  id: string;
+  createdAt: string;
+  label: string;
+}
+
+interface PresentationVersion extends PresentationVersionSummary {
+  presentation: PresentationDocument;
 }
 interface AnalysisHistoryEntry {
   id: string;
@@ -274,6 +304,9 @@ interface CloudAiConsentStatus {
     CommonModule,
     FormsModule,
     NgxEchartsDirective,
+    PresentationChartComponent,
+    PresentationDiagramComponent,
+    PresentationTableComponent,
     LucideActivity,
     LucideArrowUpRight,
     LucideBell,
@@ -315,6 +348,7 @@ export class AppComponent {
   readonly navItems = NAV_ITEMS;
   readonly Math = Math;
   readonly activeTab = signal<NavigationTab>('Dashboard');
+  readonly sidebarCollapsed = signal(globalThis.innerWidth < 820);
   readonly useCase = signal('');
   readonly analysisMode = signal<AnalysisMode>('Configured');
   readonly analysisDepth = signal<'Quick' | 'Smart' | 'Deep'>('Smart');
@@ -352,10 +386,19 @@ export class AppComponent {
   readonly presentationDuration = signal('15 minutes');
   readonly presentationStyle = signal('Visual storytelling');
   readonly presentationContentDepth = signal('Standard');
-  readonly presentationTheme = signal('Auto');
+  readonly presentationTheme = signal('Prism Blue');
+  readonly presentationInstructions = signal('');
+  readonly presentationVisualIntensity = signal('Balanced');
   readonly includeSpeakerNotes = signal(true);
   readonly includeArchitectureDiagrams = signal(true);
   readonly includeScreenshots = signal(true);
+  readonly includeFlowcharts = signal(true);
+  readonly includeDataFlowDiagrams = signal(true);
+  readonly includeCharts = signal(true);
+  readonly includeProblemSolution = signal(true);
+  readonly includeTechnicalDetails = signal(true);
+  readonly includeBusinessRecommendations = signal(true);
+  readonly includeRoadmap = signal(true);
   readonly presentationLoading = signal(false);
   readonly presentationError = signal('');
   readonly presentation = signal<PresentationDocument | null>(null);
@@ -363,8 +406,33 @@ export class AppComponent {
   readonly presentationRedoStack = signal<PresentationDocument[]>([]);
   readonly presentationDirty = signal(false);
   readonly presentationSaveError = signal('');
+  readonly presentationSaving = signal(false);
   readonly presentationPreviewIndex = signal(0);
+  readonly presentationZoom = signal(1);
+  readonly presentationAlignmentGuides = signal(false);
+  readonly draggedPresentationSlide = signal<number | null>(null);
   readonly presentationHistory = signal<PresentationDocument[]>([]);
+  readonly presentationVersions = signal<PresentationVersionSummary[]>([]);
+  readonly presentationOriginal = signal<PresentationDocument | null>(null);
+  readonly presentationCompareVersion = signal<PresentationVersion | null>(null);
+  readonly aiEditScope = signal<'SelectedElement' | 'SelectedSlide' | 'SelectedSlides' | 'EntirePresentation'>('SelectedSlide');
+  readonly aiEditElement = signal('Content');
+  readonly selectedPresentationSlides = signal<string[]>([]);
+  readonly aiEditInstruction = signal('');
+  readonly aiEditLoading = signal(false);
+  readonly aiEditError = signal('');
+  readonly aiEditProposal = signal<{
+    summary: string;
+    provider: string;
+    model: string;
+    before: PresentationDocument;
+    after: PresentationDocument;
+    scope: string;
+    element: string;
+    sectionIds: string[];
+  } | null>(null);
+  private presentationAutosaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private presentationSaveInProgress = false;
   readonly analysisElapsedSeconds = signal(0);
   readonly analysisProgress = signal<AnalysisProgressEvent | null>(null);
   readonly analysisStages = signal<string[]>([]);
@@ -681,6 +749,10 @@ export class AppComponent {
     if (tab === 'Dashboard') this.refreshAiStatus();
     this.notificationsOpen.set(false);
     this.settingsOpen.set(false);
+  }
+
+  toggleSidebar() {
+    this.sidebarCollapsed.update(collapsed => !collapsed);
   }
 
   refreshAiStatus() {
@@ -1142,9 +1214,18 @@ export class AppComponent {
       form.append('presentationStyle', this.presentationStyle());
       form.append('contentDepth', this.presentationContentDepth());
       form.append('theme', this.presentationTheme());
+      form.append('userInstructions', this.presentationInstructions());
+      form.append('visualIntensity', this.presentationVisualIntensity());
       form.append('includeSpeakerNotes', String(this.includeSpeakerNotes()));
       form.append('includeArchitectureDiagrams', String(this.includeArchitectureDiagrams()));
       form.append('includeScreenshots', String(this.includeScreenshots()));
+      form.append('includeFlowcharts', String(this.includeFlowcharts()));
+      form.append('includeDataFlowDiagrams', String(this.includeDataFlowDiagrams()));
+      form.append('includeCharts', String(this.includeCharts()));
+      form.append('includeProblemSolution', String(this.includeProblemSolution()));
+      form.append('includeTechnicalDetails', String(this.includeTechnicalDetails()));
+      form.append('includeBusinessRecommendations', String(this.includeBusinessRecommendations()));
+      form.append('includeRoadmap', String(this.includeRoadmap()));
       form.append('cloudConsentScope', this.cloudConsentStatus()?.scope ?? '');
       form.append('cloudConsentPolicyVersion', this.cloudConsentStatus()?.policyVersion ?? '');
       if (this.presentationFile()) form.append('file', this.presentationFile()!);
@@ -1156,12 +1237,17 @@ export class AppComponent {
       if (!result) throw new Error('The presentation service returned no result.');
       this.presentation.set(result);
       this.presentationTheme.set(result.theme);
+      this.presentationOriginal.set(structuredClone(result));
       this.presentationUndoStack.set([]);
       this.presentationRedoStack.set([]);
       this.presentationDirty.set(false);
       this.presentationSaveError.set('');
       this.presentationPreviewIndex.set(0);
+      this.selectedPresentationSlides.set(result.slides[0] ? [result.slides[0].sectionId ?? ''] : []);
+      this.aiEditProposal.set(null);
+      this.aiEditError.set('');
       await this.loadPresentationHistory();
+      await this.loadPresentationVersions(result.id);
     } catch (error: unknown) {
       const httpError = error as { status?: number; error?: { code?: string; error?: string; detail?: string } };
       if (httpError.error?.code === 'AI_CLOUD_CONSENT_REQUIRED') {
@@ -1193,12 +1279,14 @@ export class AppComponent {
 
   previousPresentationSlide() {
     this.presentationPreviewIndex.update(index => Math.max(0, index - 1));
+    this.selectCurrentPresentationSlide();
   }
 
   nextPresentationSlide() {
     const result = this.presentation();
     if (!result) return;
     this.presentationPreviewIndex.update(index => Math.min(result.slides.length - 1, index + 1));
+    this.selectCurrentPresentationSlide();
   }
 
   updatePresentationSlideTitle(value: string) {
@@ -1239,7 +1327,7 @@ export class AppComponent {
 
   addPresentationSlidePoint() {
     const result = this.presentation();
-    if (!result) return;
+    if (!result || result.slides[this.presentationPreviewIndex()]?.content.length >= 5) return;
     const slides = result.slides.map((slide, index) => index === this.presentationPreviewIndex()
       ? { ...slide, content: [...slide.content, 'New point'] }
       : slide);
@@ -1257,7 +1345,7 @@ export class AppComponent {
 
   addPresentationSlide() {
     const result = this.presentation();
-    if (!result) return;
+    if (!result || result.slides.length >= 30) return;
     const slides = this.reindexSlides([
       ...result.slides,
       {
@@ -1270,7 +1358,14 @@ export class AppComponent {
         visualElements: [],
         screenshotReferences: [],
         speakerNotes: '',
-        sourceReferences: []
+        sourceReferences: [],
+        fontFamily: 'Aptos',
+        backgroundColor: '',
+        textColor: '',
+        accentColor: '',
+        contentScale: 1,
+        contentAlignment: 'Left',
+        contentSpacing: 14
       }
     ]);
     this.commitPresentationEdit({ ...result, slides, totalSlides: slides.length });
@@ -1286,6 +1381,23 @@ export class AppComponent {
     this.presentationPreviewIndex.set(Math.min(this.presentationPreviewIndex(), slides.length - 1));
   }
 
+  duplicatePresentationSlide() {
+    const result = this.presentation();
+    if (!result || result.slides.length >= 30) return;
+    const index = this.presentationPreviewIndex();
+    const source = result.slides[index];
+    if (!source) return;
+    const clone = structuredClone(source);
+    clone.sectionId = globalThis.crypto.randomUUID();
+    clone.title = `${source.title} (copy)`;
+    const slides = [...result.slides];
+    slides.splice(index + 1, 0, clone);
+    const reindexed = this.reindexSlides(slides);
+    this.commitPresentationEdit({ ...result, slides: reindexed, totalSlides: reindexed.length });
+    this.presentationPreviewIndex.set(index + 1);
+    this.selectCurrentPresentationSlide();
+  }
+
   movePresentationSlide(direction: -1 | 1) {
     const result = this.presentation();
     if (!result) return;
@@ -1296,6 +1408,401 @@ export class AppComponent {
     [slides[from], slides[to]] = [slides[to], slides[from]];
     this.commitPresentationEdit({ ...result, slides: this.reindexSlides(slides) });
     this.presentationPreviewIndex.set(to);
+    this.selectCurrentPresentationSlide();
+  }
+
+  startPresentationSlideDrag(index: number) {
+    this.draggedPresentationSlide.set(index);
+  }
+
+  dropPresentationSlide(index: number) {
+    const result = this.presentation();
+    const from = this.draggedPresentationSlide();
+    this.draggedPresentationSlide.set(null);
+    if (!result || from === null || from === index || from < 0 || from >= result.slides.length) return;
+    const slides = [...result.slides];
+    const [slide] = slides.splice(from, 1);
+    slides.splice(index, 0, slide);
+    this.commitPresentationEdit({ ...result, slides: this.reindexSlides(slides) });
+    this.presentationPreviewIndex.set(index);
+    this.selectCurrentPresentationSlide();
+  }
+
+  setPresentationZoom(value: number) {
+    this.presentationZoom.set(Math.min(1.25, Math.max(0.75, value)));
+  }
+
+  selectPresentationSlide(index: number) {
+    const deck = this.presentation();
+    if (!deck || index < 0 || index >= deck.slides.length) return;
+    this.presentationPreviewIndex.set(index);
+    if (this.aiEditScope() === 'SelectedSlide' || this.aiEditScope() === 'SelectedElement') {
+      const id = deck.slides[index].sectionId;
+      if (id) this.selectedPresentationSlides.set([id]);
+    }
+  }
+
+  togglePresentationSlideSelection(sectionId: string, checked: boolean) {
+    this.selectedPresentationSlides.update(selected => checked
+      ? [...new Set([...selected, sectionId])]
+      : selected.filter(id => id !== sectionId));
+  }
+
+  setPresentationEditScope(scope: 'SelectedElement' | 'SelectedSlide' | 'SelectedSlides' | 'EntirePresentation') {
+    this.aiEditScope.set(scope);
+    if (scope === 'SelectedSlide' || scope === 'SelectedElement') this.selectCurrentPresentationSlide();
+    if (scope === 'EntirePresentation') {
+      this.selectedPresentationSlides.set(this.presentation()?.slides
+        .map(slide => slide.sectionId ?? '')
+        .filter(Boolean) ?? []);
+    }
+  }
+
+  async proposeAiPresentationEdit() {
+    if (!this.requireCloudConsent(() => { void this.proposeAiPresentationEdit(); })) return;
+    const deck = this.presentation();
+    const instruction = this.aiEditInstruction().trim();
+    if (!deck || !instruction) {
+      this.aiEditError.set('Enter an instruction before asking AI to edit.');
+      return;
+    }
+    const scope = this.aiEditScope();
+    const selectedSlide = deck.slides[this.presentationPreviewIndex()];
+    const sectionIds = scope === 'EntirePresentation'
+      ? deck.slides.map(slide => slide.sectionId ?? '').filter(Boolean)
+      : scope === 'SelectedElement' || scope === 'SelectedSlide'
+        ? selectedSlide?.sectionId ? [selectedSlide.sectionId] : []
+        : this.selectedPresentationSlides();
+    if (!sectionIds.length) {
+      this.aiEditError.set('Select at least one slide to edit.');
+      return;
+    }
+
+    this.aiEditLoading.set(true);
+    this.aiEditError.set('');
+    this.aiEditProposal.set(null);
+    const before = structuredClone(deck);
+    try {
+      const response = await this.http.post<PresentationEditProposal>(
+        `${this.apiBaseUrl}/api/presentations/${deck.id}/edit`,
+        {
+          instruction,
+          scope,
+          sectionIds,
+          element: scope === 'SelectedElement' ? this.aiEditElement() : null,
+          cloudConsentScope: this.cloudConsentStatus()?.scope ?? '',
+          cloudConsentPolicyVersion: this.cloudConsentStatus()?.policyVersion ?? '',
+          presentation: deck
+        },
+        { withCredentials: true }
+      ).toPromise();
+      if (!response) throw new Error('The AI editor returned no proposal.');
+      this.aiEditProposal.set({
+        summary: response.summary,
+        provider: response.provider,
+        model: response.model,
+        before,
+        after: response.presentation,
+        scope,
+        element: this.aiEditElement(),
+        sectionIds
+      });
+    } catch (error: unknown) {
+      const httpError = error as { status?: number; error?: { code?: string; error?: string; detail?: string } };
+      if (httpError.error?.code === 'AI_CLOUD_CONSENT_REQUIRED') {
+        this.pendingCloudConsentAction = () => { void this.proposeAiPresentationEdit(); };
+        this.cloudConsentChecked.set(false);
+        this.cloudConsentDialogOpen.set(true);
+      } else {
+        this.aiEditError.set(httpError.error?.error
+          ? `${httpError.error.error}${httpError.error.detail ? ` ${httpError.error.detail}` : ''}`
+          : `AI editing failed${httpError.status ? ` (HTTP ${httpError.status})` : ''}. Your presentation was not changed.`);
+      }
+    } finally {
+      this.aiEditLoading.set(false);
+    }
+  }
+
+  acceptAiPresentationEdit() {
+    const proposal = this.aiEditProposal();
+    const current = this.presentation();
+    if (!proposal || !current) return;
+    const slides = current.slides.map(slide => {
+      if (!proposal.sectionIds.includes(slide.sectionId ?? '')) return slide;
+      const proposed = proposal.after.slides.find(candidate => candidate.sectionId === slide.sectionId);
+      if (!proposed) return slide;
+      if (proposal.scope === 'SelectedElement') {
+        return this.applyPresentationElement(slide, proposed, proposal.element);
+      }
+      return {
+        ...slide,
+        title: proposed.title,
+        subtitle: proposed.subtitle,
+        layoutType: proposed.layoutType,
+        content: proposed.content,
+        visualElements: proposed.visualElements,
+        diagram: proposed.diagram,
+        chart: proposed.chart,
+        speakerNotes: proposed.speakerNotes
+      };
+    });
+    const wholePresentation = proposal.scope === 'EntirePresentation';
+    this.commitPresentationEdit({
+      ...current,
+      ...(wholePresentation ? {
+        title: proposal.after.title,
+        targetAudience: proposal.after.targetAudience,
+        theme: proposal.after.theme
+      } : {}),
+      slides,
+      totalSlides: slides.length
+    });
+    this.presentationTheme.set(wholePresentation ? proposal.after.theme : current.theme);
+    this.aiEditProposal.set(null);
+    this.aiEditInstruction.set('');
+  }
+
+  rejectAiPresentationEdit() {
+    this.aiEditProposal.set(null);
+  }
+
+  private applyPresentationElement(
+    current: PresentationSlide,
+    proposed: PresentationSlide,
+    element: string): PresentationSlide {
+    switch (element) {
+      case 'Title': return { ...current, title: proposed.title };
+      case 'Subtitle': return { ...current, subtitle: proposed.subtitle };
+      case 'Content': return { ...current, content: proposed.content };
+      case 'LayoutType': return { ...current, layoutType: proposed.layoutType };
+      case 'VisualElements': return { ...current, visualElements: proposed.visualElements };
+      case 'Diagram': return { ...current, diagram: proposed.diagram };
+      case 'Chart': return { ...current, chart: proposed.chart };
+      case 'SpeakerNotes': return { ...current, speakerNotes: proposed.speakerNotes };
+      default: return current;
+    }
+  }
+
+  updatePresentationSlideLayout(layoutType: string) {
+    this.updateCurrentPresentationSlide(slide => ({ ...slide, layoutType }));
+  }
+
+  updatePresentationSlideDesign(
+    property: 'fontFamily' | 'backgroundColor' | 'textColor' | 'accentColor' | 'contentScale' | 'contentAlignment' | 'contentSpacing',
+    value: string | number) {
+    this.updateCurrentPresentationSlide(slide => ({ ...slide, [property]: value }));
+  }
+
+  addPresentationVisualElement() {
+    this.updateCurrentPresentationSlide(slide => ({
+      ...slide,
+      visualElements: slide.visualElements.length >= 6
+        ? slide.visualElements
+        : [...slide.visualElements, { type: 'Card', label: 'New visual', value: 'Describe it' }]
+    }));
+  }
+
+  updatePresentationVisualElement(index: number, property: 'type' | 'label' | 'value', value: string) {
+    this.updateCurrentPresentationSlide(slide => ({
+      ...slide,
+      visualElements: slide.visualElements.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [property]: value } : item)
+    }));
+  }
+
+  removePresentationVisualElement(index: number) {
+    this.updateCurrentPresentationSlide(slide => ({
+      ...slide,
+      visualElements: slide.visualElements.filter((_, itemIndex) => itemIndex !== index)
+    }));
+  }
+
+  async addPresentationImage(event: Event) {
+    const file = (event.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type) || file.size > 1_000_000) {
+      this.presentationSaveError.set('Choose a PNG, JPEG, WebP or GIF image no larger than 1 MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => this.presentationSaveError.set('The selected image could not be read.');
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        this.presentationSaveError.set('The selected image could not be converted for offline export.');
+        return;
+      }
+      this.updateCurrentPresentationSlide(slide => ({ ...slide, imageDataUrl: reader.result as string }));
+    };
+    reader.readAsDataURL(file);
+    (event.target as HTMLInputElement).value = '';
+  }
+
+  removePresentationImage() {
+    this.updateCurrentPresentationSlide(slide => ({ ...slide, imageDataUrl: undefined }));
+  }
+
+  updatePresentationDiagram(mermaid: string) {
+    this.updateCurrentPresentationSlide(slide => ({
+      ...slide,
+      diagram: mermaid.trim() ? { type: 'Workflow', mermaid } : undefined
+    }));
+  }
+
+  presentationChartJson(slide: PresentationSlide) {
+    return slide.chart ? JSON.stringify(slide.chart, null, 2) : '';
+  }
+
+  updatePresentationChartJson(value: string) {
+    if (!value.trim()) {
+      this.updateCurrentPresentationSlide(slide => ({ ...slide, chart: undefined }));
+      return;
+    }
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (typeof parsed !== 'object' || parsed === null) throw new Error();
+      const candidate = parsed as { type?: unknown; labels?: unknown; values?: unknown };
+      const chartType = candidate.type;
+      if (typeof chartType !== 'string' ||
+          !Array.isArray(candidate.labels) ||
+          !candidate.labels.every(label => typeof label === 'string') ||
+          !Array.isArray(candidate.values) ||
+          !candidate.values.every(value => typeof value === 'number' && Number.isFinite(value)) ||
+          candidate.labels.length !== candidate.values.length ||
+          candidate.labels.length > 20) {
+        throw new Error();
+      }
+      this.updateCurrentPresentationSlide(slide => ({
+        ...slide,
+        chart: { type: chartType, labels: candidate.labels as string[], values: candidate.values as number[] }
+      }));
+      this.presentationSaveError.set('');
+    } catch {
+      this.presentationSaveError.set('Chart data must be valid JSON with matching string labels and numeric values.');
+    }
+  }
+
+  presentationTableJson(slide: PresentationSlide) {
+    return slide.table ? JSON.stringify(slide.table, null, 2) : '';
+  }
+
+  updatePresentationTableJson(value: string) {
+    if (!value.trim()) {
+      this.updateCurrentPresentationSlide(slide => ({ ...slide, table: undefined }));
+      return;
+    }
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (typeof parsed !== 'object' || parsed === null) throw new Error();
+      const candidate = parsed as { headers?: unknown; rows?: unknown };
+      if (!Array.isArray(candidate.headers) ||
+          candidate.headers.length < 1 || candidate.headers.length > 8 ||
+          !candidate.headers.every(header => typeof header === 'string' && header.length <= 120) ||
+          !Array.isArray(candidate.rows) || candidate.rows.length > 20) throw new Error();
+      const headers = candidate.headers;
+      if (!candidate.rows.every(row => Array.isArray(row) &&
+          row.length === headers.length &&
+          row.every(cell => typeof cell === 'string' && cell.length <= 300))) throw new Error();
+      this.updateCurrentPresentationSlide(slide => ({
+        ...slide,
+        table: { headers: headers as string[], rows: candidate.rows as string[][] }
+      }));
+      this.presentationSaveError.set('');
+    } catch {
+      this.presentationSaveError.set('Table data must be valid JSON with 1–8 headers and matching rows. Headers are limited to 120 characters and cells to 300.');
+    }
+  }
+
+  addPresentationTableTemplate() {
+    this.updateCurrentPresentationSlide(slide => ({
+      ...slide,
+      table: { headers: ['Item', 'Details'], rows: [['New item', 'Add details']] }
+    }));
+  }
+
+  async loadPresentationVersions(id: string) {
+    try {
+      const versions = await this.http.get<PresentationVersionSummary[]>(
+        `${this.apiBaseUrl}/api/presentations/${id}/versions`).toPromise();
+      this.presentationVersions.set(versions ?? []);
+      const original = versions?.find(version => version.label === 'Original AI draft');
+      if (original && !this.presentationOriginal()) {
+        const draft = await this.http.get<PresentationDocument>(
+          `${this.apiBaseUrl}/api/presentations/${id}/versions/${original.id}`).toPromise();
+        if (draft) this.presentationOriginal.set(draft);
+      }
+    } catch {
+      this.presentationVersions.set([]);
+    }
+  }
+
+  async restorePresentationVersion(version: PresentationVersionSummary) {
+    const deck = this.presentation();
+    if (!deck) return;
+    try {
+      const restored = await this.http.post<PresentationDocument>(
+        `${this.apiBaseUrl}/api/presentations/${deck.id}/versions/${version.id}/restore`,
+        {},
+        { withCredentials: true }
+      ).toPromise();
+      if (!restored) throw new Error('The version service returned no presentation.');
+      const current = this.presentation();
+      if (current) this.presentationUndoStack.update(stack => [...stack, current].slice(-30));
+      this.presentationRedoStack.set([]);
+      this.presentation.set(restored);
+      this.presentationTheme.set(restored.theme);
+      this.presentationDirty.set(false);
+      if (this.presentationAutosaveTimer) clearTimeout(this.presentationAutosaveTimer);
+      this.presentationAutosaveTimer = null;
+      this.presentationPreviewIndex.set(Math.min(this.presentationPreviewIndex(), restored.slides.length - 1));
+      await this.loadPresentationVersions(deck.id);
+    } catch {
+      this.presentationSaveError.set('Could not restore this presentation version. Current edits remain available.');
+    }
+  }
+
+  restoreOriginalPresentation() {
+    const original = this.presentationOriginal();
+    if (!original) return;
+    this.commitPresentationEdit(structuredClone(original));
+    this.presentationPreviewIndex.set(0);
+    this.presentationTheme.set(original.theme);
+  }
+
+  async comparePresentationVersion(version: PresentationVersionSummary) {
+    const deck = this.presentation();
+    if (!deck) return;
+    try {
+      const snapshot = await this.http.get<PresentationDocument>(
+        `${this.apiBaseUrl}/api/presentations/${deck.id}/versions/${version.id}`).toPromise();
+      if (snapshot) this.presentationCompareVersion.set({ ...version, presentation: snapshot });
+    } catch {
+      this.presentationSaveError.set('Could not load the selected version for comparison.');
+    }
+  }
+
+  private updateCurrentPresentationSlide(
+    update: (slide: PresentationSlide) => PresentationSlide) {
+    const deck = this.presentation();
+    if (!deck) return;
+    const index = this.presentationPreviewIndex();
+    const slides = deck.slides.map((slide, slideIndex) => slideIndex === index ? update(slide) : slide);
+    this.commitPresentationEdit({ ...deck, slides });
+  }
+
+  private selectCurrentPresentationSlide() {
+    const slide = this.presentation()?.slides[this.presentationPreviewIndex()];
+    if (slide?.sectionId &&
+        (this.aiEditScope() === 'SelectedSlide' || this.aiEditScope() === 'SelectedElement')) {
+      this.selectedPresentationSlides.set([slide.sectionId]);
+    }
+  }
+
+  private schedulePresentationAutosave() {
+    if (this.presentationAutosaveTimer) clearTimeout(this.presentationAutosaveTimer);
+    this.presentationAutosaveTimer = setTimeout(() => {
+      this.presentationAutosaveTimer = null;
+      void this.savePresentationEdits();
+    }, 900);
   }
 
   undoPresentationEdit() {
@@ -1305,6 +1812,9 @@ export class AppComponent {
     this.presentationUndoStack.update(stack => stack.slice(0, -1));
     this.presentationRedoStack.update(stack => [...stack, current].slice(-30));
     this.presentation.set(previous);
+    this.presentationDirty.set(true);
+    this.aiEditProposal.set(null);
+    this.schedulePresentationAutosave();
     this.presentationPreviewIndex.set(Math.min(this.presentationPreviewIndex(), previous.slides.length - 1));
   }
 
@@ -1315,6 +1825,9 @@ export class AppComponent {
     this.presentationRedoStack.update(stack => stack.slice(0, -1));
     this.presentationUndoStack.update(stack => [...stack, current].slice(-30));
     this.presentation.set(next);
+    this.presentationDirty.set(true);
+    this.aiEditProposal.set(null);
+    this.schedulePresentationAutosave();
     this.presentationPreviewIndex.set(Math.min(this.presentationPreviewIndex(), next.slides.length - 1));
   }
 
@@ -1326,6 +1839,7 @@ export class AppComponent {
 
   presentationThemeClass(theme: string | undefined) {
     const key = (theme ?? '').toLowerCase();
+    if (key.includes('prism')) return 'theme-prism';
     if (key.includes('neural')) return 'theme-neural';
     if (key.includes('cinematic')) return 'theme-cinematic';
     if (key.includes('gold')) return 'theme-gold';
@@ -1340,9 +1854,17 @@ export class AppComponent {
   presentationLayoutClass(layout: string | undefined) {
     const key = (layout ?? '').toLowerCase();
     if (['title', 'hero', 'executivesummary'].includes(key)) return 'layout-hero';
-    if (['workflow', 'userjourney'].includes(key)) return 'layout-workflow';
-    if (['architecturediagram', 'blueprint'].includes(key)) return 'layout-blueprint';
+    if (['workflow', 'userjourney', 'decisiontree', 'swimlane', 'sequencediagram'].includes(key)) return 'layout-workflow';
+    if (['architecturediagram', 'blueprint', 'dataflow', 'integrationarchitecture',
+      'securityarchitecture', 'technologystack'].includes(key)) return 'layout-blueprint';
     if (['conclusion', 'qanda'].includes(key)) return 'layout-conclusion';
+    if (['kpidashboard', 'dashboard', 'insight'].includes(key)) return 'layout-dashboard';
+    if (['comparison', 'comparisonmatrix', 'problem', 'problemandsolution',
+      'businessecosystem'].includes(key)) return 'layout-comparison';
+    if (['roadmap', 'timeline', 'implementationroadmap'].includes(key)) return 'layout-roadmap';
+    if (['riskmitigation', 'riskassessment'].includes(key)) return 'layout-risk';
+    if (['capacityallocation', 'allocation'].includes(key)) return 'layout-allocation';
+    if (['chart', 'barchart', 'donutchart', 'linechart', 'funnelchart'].includes(key)) return 'layout-chart';
     return 'layout-story';
   }
 
@@ -1359,6 +1881,8 @@ export class AppComponent {
     this.presentation.set(updated);
     this.presentationDirty.set(true);
     this.presentationSaveError.set('');
+    this.aiEditProposal.set(null);
+    this.schedulePresentationAutosave();
   }
 
   private reindexSlides(slides: PresentationSlide[]) {
@@ -1380,11 +1904,16 @@ export class AppComponent {
   openPresentation(presentation: PresentationDocument) {
     this.presentation.set(presentation);
     this.presentationTheme.set(presentation.theme);
+    this.presentationOriginal.set(null);
     this.presentationUndoStack.set([]);
     this.presentationRedoStack.set([]);
     this.presentationDirty.set(false);
     this.presentationSaveError.set('');
     this.presentationPreviewIndex.set(0);
+    this.selectedPresentationSlides.set(presentation.slides[0] ? [presentation.slides[0].sectionId ?? ''] : []);
+    this.aiEditProposal.set(null);
+    this.aiEditError.set('');
+    void this.loadPresentationVersions(presentation.id);
   }
 
   startPresentation(presentation?: PresentationDocument) {
@@ -1459,6 +1988,7 @@ export class AppComponent {
 
   togglePresentationTheme() {
     const themes = [
+      'Prism Blue',
       'Neural Intelligence',
       'Cinematic Product Launch',
       'Executive Gold',
@@ -1473,8 +2003,11 @@ export class AppComponent {
   }
 
   async savePresentationEdits() {
+    if (this.presentationSaveInProgress) return;
     const current = this.presentation();
     if (!current || !this.presentationDirty()) return;
+    this.presentationSaveInProgress = true;
+    this.presentationSaving.set(true);
     this.presentationSaveError.set('');
     try {
       const saved = await this.http.put<PresentationDocument>(
@@ -1483,13 +2016,22 @@ export class AppComponent {
         { withCredentials: true }
       ).toPromise();
       if (!saved) throw new Error('The presentation service returned no saved version.');
-      this.presentation.set(saved);
-      this.presentationDirty.set(false);
+      const latest = this.presentation();
+      if (latest && JSON.stringify(latest) === JSON.stringify(current)) {
+        this.presentation.set(saved);
+        this.presentationDirty.set(false);
+      }
       await this.loadPresentationHistory();
+      await this.loadPresentationVersions(current.id);
     } catch (error: unknown) {
       const status = (error as { status?: number }).status;
       this.presentationSaveError.set(
         `Could not save presentation edits${status ? ` (HTTP ${status})` : ''}. Your local edits remain available.`);
+    } finally {
+      this.presentationSaveInProgress = false;
+      this.presentationSaving.set(false);
+      const latest = this.presentation();
+      if (latest && JSON.stringify(latest) !== JSON.stringify(current)) this.schedulePresentationAutosave();
     }
   }
 

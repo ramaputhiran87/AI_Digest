@@ -154,6 +154,7 @@ builder.Services.AddScoped<DocumentAnalysisService>();
 builder.Services.AddHttpClient<PresentationSourceProviders>(client =>
     client.Timeout = TimeSpan.FromSeconds(45));
 builder.Services.AddScoped<PresentationPlanningService>();
+builder.Services.AddScoped<PresentationEditingService>();
 builder.Services.AddScoped<PresentationGenerationService>();
 builder.Services.AddSingleton<PresentationHistoryStore>();
 builder.Services.AddScoped<PresentationStudioService>();
@@ -692,9 +693,18 @@ var presentationPreviewEndpoint = app.MapPost("/api/presentations/preview", asyn
                 SlideCount = int.TryParse(form["slideCount"], out var count) ? count : 10,
                 Language = form["language"].ToString(),
                 AspectRatio = form["aspectRatio"].ToString(),
+                UserInstructions = form["userInstructions"].ToString(),
+                VisualIntensity = form["visualIntensity"].ToString(),
                 IncludeSpeakerNotes = bool.TryParse(form["includeSpeakerNotes"], out var notes) && notes,
                 IncludeArchitectureDiagrams = bool.TryParse(form["includeArchitectureDiagrams"], out var diagrams) && diagrams,
                 IncludeScreenshots = bool.TryParse(form["includeScreenshots"], out var screenshots) && screenshots,
+                IncludeFlowcharts = bool.TryParse(form["includeFlowcharts"], out var flowcharts) && flowcharts,
+                IncludeDataFlowDiagrams = bool.TryParse(form["includeDataFlowDiagrams"], out var dataFlowDiagrams) && dataFlowDiagrams,
+                IncludeCharts = bool.TryParse(form["includeCharts"], out var charts) && charts,
+                IncludeProblemSolution = bool.TryParse(form["includeProblemSolution"], out var problemSolution) && problemSolution,
+                IncludeTechnicalDetails = bool.TryParse(form["includeTechnicalDetails"], out var technicalDetails) && technicalDetails,
+                IncludeBusinessRecommendations = bool.TryParse(form["includeBusinessRecommendations"], out var businessRecommendations) && businessRecommendations,
+                IncludeRoadmap = bool.TryParse(form["includeRoadmap"], out var roadmap) && roadmap,
                 CloudConsentScope = form["cloudConsentScope"].ToString(),
                 CloudConsentPolicyVersion = form["cloudConsentPolicyVersion"].ToString()
             };
@@ -796,6 +806,75 @@ app.MapPut("/api/presentations/{id:guid}", (Guid id,
     }
 }).AllowAnonymous();
 
+var presentationEditEndpoint = app.MapPost("/api/presentations/{id:guid}/edit", async (
+    Guid id,
+    PresentationEditRequest editRequest,
+    HttpContext httpContext,
+    PresentationEditingService editor,
+    AiProviderConfiguration aiConfiguration,
+    IEnumerable<IAiModelClient> aiClients,
+    CloudAiConsentService consent,
+    AiDailyUsageLimiter dailyUsage,
+    CancellationToken cancellationToken) =>
+{
+    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+    timeout.CancelAfter(TimeSpan.FromSeconds(aiConfiguration.RequestTimeoutSeconds));
+    try
+    {
+        if (editRequest.Presentation.Id != id)
+            return Results.BadRequest(new { error = "Presentation ID mismatch." });
+
+        var consentValid = consent.HasValidConsent(
+            httpContext,
+            editRequest.CloudConsentScope,
+            editRequest.CloudConsentPolicyVersion);
+        if (RequiresCloudConsent(aiConfiguration, aiClients, null) && !consentValid)
+            return MapAnalysisFailure(new AnalysisProviderException(
+                "Cloud AI editing requires your explicit consent.",
+                failureCode: AnalysisFailureCode.CloudConsentRequired));
+        if (!dailyUsage.TryConsume(
+                GetAnalysisUserKey(httpContext),
+                aiConfiguration.DailyUsageLimit,
+                DateOnly.FromDateTime(DateTime.UtcNow)))
+        {
+            return MapAnalysisFailure(new AnalysisProviderException(
+                "Daily AI usage limit reached.",
+                failureCode: AnalysisFailureCode.DailyLimitReached));
+        }
+
+        var proposal = await editor.ProposeAsync(
+            editRequest,
+            !aiConfiguration.CloudConsentRequired || consentValid,
+            timeout.Token);
+        return Results.Ok(proposal);
+    }
+    catch (AnalysisProviderException exception)
+    {
+        return MapAnalysisFailure(exception);
+    }
+    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+    {
+        return MapAnalysisFailure(new AnalysisProviderException(
+            "The AI editing request exceeded its configured timeout.",
+            failureCode: AnalysisFailureCode.RequestTimeout));
+    }
+}).RequireRateLimiting("analysis")
+  .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(22 * 1024 * 1024));
+if (entraConfigured)
+{
+    presentationEditEndpoint.RequireAuthorization();
+}
+else
+{
+    presentationEditEndpoint.AddEndpointFilter(async (context, next) =>
+    {
+        var remoteAddress = context.HttpContext.Connection.RemoteIpAddress;
+        if (remoteAddress is null || !IPAddress.IsLoopback(remoteAddress))
+            return Results.Unauthorized();
+        return await next(context);
+    });
+}
+
 app.MapGet("/api/presentations", (PresentationStudioService studio) =>
     Results.Ok(studio.History)).AllowAnonymous();
 
@@ -804,6 +883,26 @@ app.MapGet("/api/presentations/{id:guid}", (Guid id, PresentationStudioService s
     try { return Results.Ok(studio.Get(id)); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
 }).AllowAnonymous();
+
+app.MapGet("/api/presentations/{id:guid}/versions", (Guid id, PresentationStudioService studio) =>
+{
+    try { return Results.Ok(studio.Versions(id)); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+}).AllowAnonymous();
+
+app.MapGet("/api/presentations/{id:guid}/versions/{versionId:guid}",
+    (Guid id, Guid versionId, PresentationStudioService studio) =>
+    {
+        try { return Results.Ok(studio.GetVersion(id, versionId)); }
+        catch (KeyNotFoundException) { return Results.NotFound(); }
+    }).AllowAnonymous();
+
+app.MapPost("/api/presentations/{id:guid}/versions/{versionId:guid}/restore",
+    (Guid id, Guid versionId, PresentationStudioService studio) =>
+    {
+        try { return Results.Ok(studio.RestoreVersion(id, versionId)); }
+        catch (KeyNotFoundException) { return Results.NotFound(); }
+    }).AllowAnonymous();
 
 app.MapGet("/api/presentations/{id:guid}/pptx", (Guid id,
     PresentationStudioService studio) =>

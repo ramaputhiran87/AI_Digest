@@ -1,28 +1,43 @@
-<header class="topbar">
-  <a class="brand" href="#" (click)="$event.preventDefault(); setTab('Dashboard')" aria-label="AI Document Digest dashboard">
-    <span class="brand-mark"><svg lucideSparkles></svg></span>
-    <span class="brand-copy">
-      <strong>AI Document Digest</strong>
-      <small>Enterprise Intelligence Platform</small>
-    </span>
-  </a>
-
-  <nav class="primary-nav" aria-label="Main navigation">
-    @for (item of navItems; track item) {
-      <button class="nav-link" [class.active]="activeTab() === item" (click)="setTab(item)">
-        @switch (item) {
-          @case ('Dashboard') { <svg lucideLayoutDashboard></svg> }
-          @case ('Document Analysis') { <svg lucideFileSearch></svg> }
-          @case ('Presentation Studio') { <svg lucidePresentation></svg> }
-          @case ('Analytics') { <svg lucideChartNoAxesCombined></svg> }
-          @case ('History') { <svg lucideClock></svg> }
-        }
-        <span>{{ item }}</span>
-      </button>
-    }
-  </nav>
-
-  <div class="top-actions">
+<div class="app-shell" [class.sidebar-collapsed]="sidebarCollapsed()">
+  <aside class="app-sidebar">
+    <a class="brand" href="#" (click)="$event.preventDefault(); setTab('Dashboard')" aria-label="AI Document Digest dashboard">
+      <span class="brand-mark"><svg lucideSparkles></svg></span>
+      <span class="brand-copy">
+        <strong>AI Document Digest</strong>
+        <small>Enterprise AI workspace</small>
+      </span>
+    </a>
+    <div class="workspace-badge"><span></span><div><strong>Enterprise workspace</strong><small>Private session</small></div></div>
+    <nav class="primary-nav" aria-label="Main navigation">
+      <span class="sidebar-section-label">MAIN WORKSPACE</span>
+      @for (item of navItems; track item) {
+        <button class="nav-link" [class.active]="activeTab() === item" [attr.title]="sidebarCollapsed() ? item : null" (click)="setTab(item)">
+          @switch (item) {
+            @case ('Dashboard') { <svg lucideLayoutDashboard></svg> }
+            @case ('Document Analysis') { <svg lucideFileSearch></svg> }
+            @case ('Presentation Studio') { <svg lucidePresentation></svg> }
+            @case ('Analytics') { <svg lucideChartNoAxesCombined></svg> }
+            @case ('History') { <svg lucideClock></svg> }
+          }
+          <span>{{ item === 'Presentation Studio' ? 'AI Presentation Studio' : item === 'History' ? 'Analysis History' : item }}</span>
+          @if (activeTab() === item) { <i></i> }
+        </button>
+      }
+    </nav>
+    <div class="sidebar-footer">
+      <div class="sidebar-ai-card"><span class="sidebar-ai-icon"><svg lucideSparkles></svg></span><div><strong>AI workspace</strong><small>{{ aiServiceStatus()?.activeProviderName ?? 'Provider status unavailable' }}</small></div></div>
+      <small class="sidebar-version">AI_DIGEST · ENTERPRISE</small>
+    </div>
+  </aside>
+  @if (!sidebarCollapsed()) { <button class="sidebar-backdrop" aria-label="Close navigation" (click)="sidebarCollapsed.set(true)"></button> }
+  <div class="app-shell-content">
+    <header class="topbar">
+      <div class="topbar-heading">
+        <button class="sidebar-toggle" (click)="toggleSidebar()" [attr.aria-expanded]="!sidebarCollapsed()" aria-label="Toggle navigation sidebar"><span></span><span></span><span></span></button>
+        <div><small>AI DIGEST <span>/</span> WORKSPACE</small><strong>{{ activeTab() === 'Presentation Studio' ? 'AI Presentation Studio' : activeTab() }}</strong></div>
+      </div>
+      <div class="top-actions">
+        <span class="provider-status" [class.online]="aiServiceStatus()?.serviceStatus === 'Online'"><i></i>{{ aiServiceStatusLoading() ? 'Checking AI' : aiServiceStatus()?.activeProviderName ?? 'AI status unavailable' }}</span>
     <div class="popover-anchor">
       <button class="icon-button notification-button" aria-label="Notifications"
         [attr.aria-expanded]="notificationsOpen()" (click)="toggleNotifications()">
@@ -68,8 +83,8 @@
       }
     </div>
     <button class="icon-button settings-button" aria-label="Workspace settings" (click)="toggleSettings()"><svg lucideSettings></svg></button>
-  </div>
-</header>
+      </div>
+    </header>
 
 <main class="app-main">
   @if (apiError()) {
@@ -170,7 +185,11 @@
       </article>
       <article class="panel chart-panel risk-chart-panel">
         <div class="panel-heading"><div><h2>Risk distribution</h2><p>Findings from successful saved analyses</p></div><svg lucideChartPie class="heading-icon"></svg></div>
-        <div echarts [options]="riskOption()" class="chart chart-donut" role="img" aria-label="Donut chart showing risk severity from local history"></div>
+        @if (riskDistribution().Critical + riskDistribution().High + riskDistribution().Medium + riskDistribution().Low > 0) {
+          <div echarts [options]="riskOption()" class="chart chart-donut" role="img" aria-label="Donut chart showing risk severity from local history"></div>
+        } @else {
+          <p class="risk-chart-empty">No assessed risks in saved analyses.</p>
+        }
         <div class="mini-legend">
           <span><i class="legend-critical"></i>Critical <strong>{{ riskDistribution().Critical }}</strong></span>
           <span><i class="legend-high"></i>High <strong>{{ riskDistribution().High }}</strong></span>
@@ -483,7 +502,11 @@
       </article>
       <article class="panel chart-panel">
         <div class="panel-heading"><div><h2>Risk distribution</h2><p>Actual finding severity across saved reviews</p></div><svg lucideChartPie class="heading-icon"></svg></div>
-        <div echarts [options]="riskOption()" class="chart chart-donut" role="img" aria-label="Risk distribution chart"></div>
+        @if (riskDistribution().Critical + riskDistribution().High + riskDistribution().Medium + riskDistribution().Low > 0) {
+          <div echarts [options]="riskOption()" class="chart chart-donut" role="img" aria-label="Risk distribution chart"></div>
+        } @else {
+          <p class="risk-chart-empty">No assessed risks in saved analyses.</p>
+        }
         <div class="mini-legend"><span><i class="legend-critical"></i>Critical <strong>{{ riskDistribution().Critical }}</strong></span><span><i class="legend-high"></i>High <strong>{{ riskDistribution().High }}</strong></span><span><i class="legend-medium"></i>Medium <strong>{{ riskDistribution().Medium }}</strong></span><span><i class="legend-low"></i>Low <strong>{{ riskDistribution().Low }}</strong></span></div>
       </article>
       <article class="panel chart-panel">
@@ -537,15 +560,17 @@
           <label>Presentation title<input [ngModel]="presentationTitle()" (ngModelChange)="presentationTitle.set($event)"></label>
           <label>Target audience<input [ngModel]="presentationAudience()" (ngModelChange)="presentationAudience.set($event)"></label>
           <label>Presentation purpose<input [ngModel]="presentationPurpose()" (ngModelChange)="presentationPurpose.set($event)"></label>
+          <label class="idea-instructions">Describe your presentation ideas<textarea [ngModel]="presentationInstructions()" (ngModelChange)="presentationInstructions.set($event)" maxlength="5000" rows="4" placeholder="Share your storytelling approach, key messages, examples, and design preferences."></textarea><small>These instructions guide the AI plan; source facts remain the evidence boundary.</small></label>
           <div class="presentation-option-grid">
             <label>Presentation format<select [ngModel]="presentationMode()" (ngModelChange)="presentationMode.set($event)"><option value="InteractiveStorytelling">Interactive Storytelling · Recommended</option><option value="InteractiveWeb">Interactive Web Presentation</option><option value="LiveProductShowcase">Live Product Showcase</option><option value="InteractiveArchitecture">Interactive Architecture</option><option value="ExecutiveDashboard">Executive Dashboard</option><option value="MindMap">Mind Map Presentation</option><option value="TraditionalPowerPoint">Traditional PowerPoint</option></select></label>
             <label>Duration<select [ngModel]="presentationDuration()" (ngModelChange)="presentationDuration.set($event)"><option>5 minutes</option><option>10 minutes</option><option>15 minutes</option><option>20 minutes</option><option>30 minutes</option><option>45 minutes</option></select></label>
             <label>Presentation style<select [ngModel]="presentationStyle()" (ngModelChange)="presentationStyle.set($event)"><option>Professional</option><option>Executive</option><option>Technical</option><option>Cinematic</option><option>Product showcase</option><option>Educational</option><option>Sales proposal</option><option>Visual storytelling</option></select></label>
             <label>Content depth<select [ngModel]="presentationContentDepth()" (ngModelChange)="presentationContentDepth.set($event)"><option>Brief</option><option>Standard</option><option>Detailed</option></select></label>
-            <label>Theme<select [ngModel]="presentationTheme()" (ngModelChange)="selectPresentationTheme($event)"><option value="Auto">Auto — AI recommendation</option><option>Neural Intelligence</option><option>Cinematic Product Launch</option><option>Executive Gold</option><option>Digital Blueprint</option><option>Immersive Storytelling</option><option>Knowledge Universe</option></select></label>
+            <label>Theme<select [ngModel]="presentationTheme()" (ngModelChange)="selectPresentationTheme($event)"><option>Prism Blue</option><option value="Auto">Auto — AI recommendation</option><option>Neural Intelligence</option><option>Cinematic Product Launch</option><option>Executive Gold</option><option>Digital Blueprint</option><option>Immersive Storytelling</option><option>Knowledge Universe</option></select></label>
+            <label>Visual intensity<select [ngModel]="presentationVisualIntensity()" (ngModelChange)="presentationVisualIntensity.set($event)"><option>Minimal</option><option>Balanced</option><option>Expressive</option></select></label>
           </div>
-          <div class="presentation-option-grid"><label>Slide count<select [ngModel]="presentationSlideCount()" (ngModelChange)="presentationSlideCount.set($event)"><option [ngValue]="7">Quick · 7</option><option [ngValue]="12">Standard · 12</option><option [ngValue]="20">Detailed · 20</option><option [ngValue]="30">Maximum · 30</option></select></label><label>Aspect ratio<select [ngModel]="presentationAspectRatio()" (ngModelChange)="presentationAspectRatio.set($event)"><option value="16:9">Widescreen 16:9</option><option value="4:3">Standard 4:3</option></select></label><label>Language<select [ngModel]="presentationLanguage()" (ngModelChange)="presentationLanguage.set($event)"><option>English</option><option>French</option><option>German</option><option>Spanish</option></select></label></div>
-          <div class="presentation-switches"><label><input type="checkbox" [ngModel]="includeSpeakerNotes()" (ngModelChange)="includeSpeakerNotes.set($event)"> Speaker notes</label><label><input type="checkbox" [ngModel]="includeArchitectureDiagrams()" (ngModelChange)="includeArchitectureDiagrams.set($event)"> Architecture diagrams</label><label><input type="checkbox" [ngModel]="includeScreenshots()" (ngModelChange)="includeScreenshots.set($event)"> Application screenshots</label></div>
+          <div class="presentation-option-grid"><label>Slide count<select [ngModel]="presentationSlideCount()" (ngModelChange)="presentationSlideCount.set($event)"><option [ngValue]="7">Quick · 7</option><option [ngValue]="12">Standard · 12</option><option [ngValue]="20">Detailed · 20</option><option [ngValue]="30">Maximum · 30</option></select></label><label>Aspect ratio<select [ngModel]="presentationAspectRatio()" (ngModelChange)="presentationAspectRatio.set($event)"><option value="16:9">Widescreen 16:9</option><option value="4:3">Standard 4:3</option></select></label><label>Language<select [ngModel]="presentationLanguage()" (ngModelChange)="presentationLanguage.set($event)"><option>English</option><option>Tamil</option><option>French</option><option>German</option><option>Spanish</option></select></label></div>
+          <div class="presentation-switches"><label><input type="checkbox" [ngModel]="includeSpeakerNotes()" (ngModelChange)="includeSpeakerNotes.set($event)"> Speaker notes</label><label><input type="checkbox" [ngModel]="includeArchitectureDiagrams()" (ngModelChange)="includeArchitectureDiagrams.set($event)"> System architecture</label><label><input type="checkbox" [ngModel]="includeFlowcharts()" (ngModelChange)="includeFlowcharts.set($event)"> Flowcharts</label><label><input type="checkbox" [ngModel]="includeDataFlowDiagrams()" (ngModelChange)="includeDataFlowDiagrams.set($event)"> Data flow diagrams</label><label><input type="checkbox" [ngModel]="includeCharts()" (ngModelChange)="includeCharts.set($event)"> Charts and infographics</label><label><input type="checkbox" [ngModel]="includeProblemSolution()" (ngModelChange)="includeProblemSolution.set($event)"> Problem/solution comparison</label><label><input type="checkbox" [ngModel]="includeTechnicalDetails()" (ngModelChange)="includeTechnicalDetails.set($event)"> Technical details</label><label><input type="checkbox" [ngModel]="includeBusinessRecommendations()" (ngModelChange)="includeBusinessRecommendations.set($event)"> Business recommendations</label><label><input type="checkbox" [ngModel]="includeRoadmap()" (ngModelChange)="includeRoadmap.set($event)"> Implementation roadmap</label><label><input type="checkbox" [ngModel]="includeScreenshots()" (ngModelChange)="includeScreenshots.set($event)"> Application screenshots</label></div>
         </div>
       </div>
       <div class="upload-footer"><span class="upload-privacy"><svg lucideShieldCheck></svg> Source content is sent only after you grant cloud AI consent.</span><button class="button button-primary analyze-button" [disabled]="presentationLoading()" (click)="generatePresentation()">@if (presentationLoading()) { <span class="button-spinner"></span> Generating… } @else { <svg lucideSparkles></svg> Generate presentation }</button></div>
@@ -553,16 +578,43 @@
 
     @if (presentation(); as deck) {
       <section class="presentation-preview-layout">
-        <aside class="panel slide-thumbnails"><div class="panel-heading"><div><h2>Slides</h2><p>{{ deck.totalSlides }} slides</p></div></div><div class="thumbnail-list">@for (slide of deck.slides; track slide.slideNumber) { <button class="slide-thumbnail" [class.selected]="presentationPreviewIndex() === $index" (click)="presentationPreviewIndex.set($index)"><span>{{ slide.slideNumber }}</span><strong>{{ slide.title }}</strong></button> }</div></aside>
-        <article class="panel slide-preview"><div class="slide-preview-toolbar"><button class="table-action" aria-label="Previous slide" (click)="previousPresentationSlide()"><svg lucideChevronLeft></svg></button><span>{{ presentationPreviewIndex() + 1 }} / {{ deck.slides.length }}</span><button class="table-action" aria-label="Next slide" (click)="nextPresentationSlide()"><svg lucideChevronRight></svg></button></div>
+        <aside class="panel slide-thumbnails">
+          <div class="panel-heading"><div><h2>Slides</h2><p>{{ deck.totalSlides }} slides</p></div></div>
+          <div class="thumbnail-actions"><button class="text-action" [disabled]="deck.slides.length >= 30" (click)="addPresentationSlide()">+ Add</button><button class="text-action" [disabled]="deck.slides.length >= 30" (click)="duplicatePresentationSlide()">Duplicate</button></div>
+          <div class="thumbnail-list">@for (slide of deck.slides; track slide.sectionId; let index = $index) {
+            <div class="thumbnail-row" [class.selected]="presentationPreviewIndex() === index" [class.dragging]="draggedPresentationSlide() === index"
+              draggable="true" (dragstart)="startPresentationSlideDrag(index)" (dragend)="draggedPresentationSlide.set(null)"
+              (dragover)="$event.preventDefault()" (drop)="dropPresentationSlide(index)">
+              <button class="slide-thumbnail" [class.selected]="presentationPreviewIndex() === index" (click)="selectPresentationSlide(index)"><span>{{ slide.slideNumber }}</span><strong>{{ slide.title }}</strong></button>
+              <input type="checkbox" [checked]="selectedPresentationSlides().includes(slide.sectionId ?? '')" [attr.aria-label]="'Select slide ' + slide.slideNumber + ' for AI editing'" (change)="togglePresentationSlideSelection(slide.sectionId ?? '', $any($event.target).checked)">
+            </div>
+          }</div>
+        </aside>
+        <article class="panel slide-preview">
+          <div class="slide-preview-toolbar">
+            <button class="table-action" aria-label="Previous slide" (click)="previousPresentationSlide()"><svg lucideChevronLeft></svg></button>
+            <span>{{ presentationPreviewIndex() + 1 }} / {{ deck.slides.length }}</span>
+            <button class="table-action" aria-label="Next slide" (click)="nextPresentationSlide()"><svg lucideChevronRight></svg></button>
+            <button class="table-action" aria-label="Zoom out" (click)="setPresentationZoom(presentationZoom() - 0.1)">−</button>
+            <span class="zoom-readout">{{ Math.round(presentationZoom() * 100) }}%</span>
+            <button class="table-action" aria-label="Zoom in" (click)="setPresentationZoom(presentationZoom() + 0.1)">+</button>
+            <button class="table-action" [class.active]="presentationAlignmentGuides()" aria-label="Toggle alignment guides" (click)="presentationAlignmentGuides.update(show => !show)">Guides</button>
+            <button class="table-action" title="Move slide left" aria-label="Move slide up" (click)="movePresentationSlide(-1)">↑</button>
+            <button class="table-action" title="Move slide right" aria-label="Move slide down" (click)="movePresentationSlide(1)">↓</button>
+            <button class="table-action danger-action" title="Delete slide" aria-label="Delete slide" [disabled]="deck.slides.length <= 1" (click)="removePresentationSlide()"><svg lucideTrash2></svg></button>
+          </div>
           @if (presentationPreviewSlide(); as slide) {
-            <div class="slide-canvas" [ngClass]="[presentationThemeClass(deck.theme), presentationLayoutClass(slide.layoutType)]" [class.standard]="deck.aspectRatio === '4:3'">
-              <div class="slide-accent"></div>
+            <div class="slide-canvas" [ngClass]="[presentationThemeClass(deck.theme), presentationLayoutClass(slide.layoutType)]" [class.standard]="deck.aspectRatio === '4:3'" [class.show-guides]="presentationAlignmentGuides()"
+              [attr.data-align]="slide.contentAlignment.toLowerCase()"
+              [style.background-color]="slide.backgroundColor || null" [style.color]="slide.textColor || null" [style.font-family]="slide.fontFamily" [style.--content-scale]="slide.contentScale" [style.transform]="'scale(' + presentationZoom() + ')'">
+              <div class="slide-accent" [style.background]="slide.accentColor || null"></div>
+              @if (presentationAlignmentGuides()) { <div class="alignment-guides" aria-hidden="true"><i></i><i></i></div> }
               <span class="slide-layout-label">{{ slide.layoutType }}</span>
-              <div class="slide-canvas-body">
-                <h2>{{ slide.title }}</h2>
-                @if (slide.subtitle) { <p class="slide-subtitle">{{ slide.subtitle }}</p> }
-                <div class="slide-content-list">
+              <div class="slide-canvas-body" [style.text-align]="slide.contentAlignment.toLowerCase()" [style.gap.px]="slide.contentSpacing">
+                @if (slide.imageDataUrl) { <img class="slide-editor-image" [src]="slide.imageDataUrl" [alt]="slide.title"> }
+                <h2 [style.color]="slide.textColor || null">{{ slide.title }}</h2>
+                @if (slide.subtitle) { <p class="slide-subtitle" [style.color]="slide.textColor || null">{{ slide.subtitle }}</p> }
+                <div class="slide-content-list" [style.color]="slide.textColor || null">
                   @for (item of slide.content; track $index) {
                     <div><i></i><span>{{ item }}</span></div>
                   }
@@ -570,12 +622,18 @@
                 @if (slide.visualElements.length) {
                   <div class="slide-kpi-grid">
                     @for (visual of slide.visualElements; track visual.label) {
-                      <div><small>{{ visual.label }}</small><strong>{{ visual.value }}</strong></div>
+                      <div>@if (visual.type === 'Icon') { <span class="visual-icon">{{ visual.value }}</span><small>{{ visual.label }}</small> } @else { <small>{{ visual.label }}</small><strong>{{ visual.value }}</strong> }</div>
                     }
                   </div>
                 }
                 @if (slide.diagram) {
-                  <div class="slide-diagram"><strong>{{ slide.diagram.type }} diagram</strong><small>{{ slide.diagram.mermaid }}</small></div>
+                  <div class="slide-diagram"><strong>{{ slide.diagram.type }} diagram</strong><app-presentation-diagram [mermaid]="slide.diagram.mermaid"></app-presentation-diagram></div>
+                }
+                @if (slide.chart) {
+                  <div class="slide-chart"><app-presentation-chart [chart]="slide.chart"></app-presentation-chart></div>
+                }
+                @if (slide.table) {
+                  <div class="slide-chart slide-table"><app-presentation-table [table]="slide.table"></app-presentation-table></div>
                 }
               </div>
               <span class="slide-page-number">{{ slide.slideNumber }}</span>
@@ -583,43 +641,108 @@
             <div class="speaker-notes"><strong>Speaker notes</strong><p>{{ slide.speakerNotes || 'No speaker notes requested.' }}</p></div>
           }
         </article>
-      </section>
-
-      @if (presentationPreviewSlide(); as slide) {
-        <section class="panel presentation-editor">
-          <div class="panel-heading"><div><h2>Edit presentation</h2><p>Manual changes update this preview without using AI or provider quota.</p></div>
+        @if (presentationPreviewSlide(); as slide) {
+          <aside class="panel presentation-editor">
+          <div class="panel-heading"><div><h2>Customize</h2><p>Changes preview immediately and auto-save.</p></div>
             <div class="presentation-edit-actions">
-              @if (presentationDirty()) { <button class="button button-primary" (click)="savePresentationEdits()">Save changes</button> }
+              @if (presentationSaving()) { <span class="autosave-state">Saving…</span> }
+              @else if (presentationDirty()) { <span class="autosave-state">Unsaved</span> }
+              @else { <span class="autosave-state">Saved</span> }
               <button class="button button-secondary" [disabled]="!presentationUndoStack().length" (click)="undoPresentationEdit()">Undo</button>
               <button class="button button-secondary" [disabled]="!presentationRedoStack().length" (click)="redoPresentationEdit()">Redo</button>
-              <button class="button button-secondary" (click)="movePresentationSlide(-1)">Move section up</button>
-              <button class="button button-secondary" (click)="movePresentationSlide(1)">Move section down</button>
-              <button class="button button-secondary" (click)="addPresentationSlide()">Add section</button>
-              <button class="button button-secondary" [disabled]="deck.slides.length <= 1" (click)="removePresentationSlide()">Delete section</button>
             </div>
           </div>
           @if (presentationSaveError()) { <div class="api-error">{{ presentationSaveError() }}</div> }
-          <div class="presentation-editor-grid">
-            <label>Theme
-              <select [ngModel]="deck.theme" (ngModelChange)="selectPresentationTheme($event)">
-                <option>Neural Intelligence</option><option>Cinematic Product Launch</option><option>Executive Gold</option><option>Digital Blueprint</option><option>Immersive Storytelling</option><option>Knowledge Universe</option>
-              </select>
-              <small>Recommended: {{ deck.themeRecommendation || deck.theme }} · Theme changes are local and do not regenerate content.</small>
-            </label>
-            <label>Section title<input [ngModel]="slide.title" (ngModelChange)="updatePresentationSlideTitle($event)"></label>
-            <label>Subtitle<input [ngModel]="slide.subtitle" (ngModelChange)="updatePresentationSlideSubtitle($event)"></label>
-            <label>Speaker notes<textarea rows="3" [ngModel]="slide.speakerNotes" (ngModelChange)="updatePresentationSlideNotes($event)"></textarea></label>
-            <div class="presentation-content-editor">
-              <strong>Section content</strong>
-              @for (item of slide.content; track $index) {
-                <div><textarea rows="2" [ngModel]="item" (ngModelChange)="updatePresentationSlideContent($event, $index)" [attr.aria-label]="'Edit content point ' + ($index + 1)"></textarea><button class="table-action danger-action" (click)="removePresentationSlidePoint($index)" [attr.aria-label]="'Remove content point ' + ($index + 1)"><svg lucideTrash2></svg></button></div>
+          <div class="editor-scroll">
+            <section class="editor-group"><strong>Slide content</strong>
+              <label>Title<input [ngModel]="slide.title" (ngModelChange)="updatePresentationSlideTitle($event)"></label>
+              <label>Subtitle<input [ngModel]="slide.subtitle" (ngModelChange)="updatePresentationSlideSubtitle($event)"></label>
+              <div class="presentation-content-editor">
+                <strong>Content</strong>
+                @for (item of slide.content; track $index) {
+                  <div><textarea rows="2" [ngModel]="item" (ngModelChange)="updatePresentationSlideContent($event, $index)" [attr.aria-label]="'Edit content point ' + ($index + 1)"></textarea><button class="table-action danger-action" (click)="removePresentationSlidePoint($index)" [attr.aria-label]="'Remove content point ' + ($index + 1)"><svg lucideTrash2></svg></button></div>
+                }
+                <button class="text-action" [disabled]="slide.content.length >= 5" (click)="addPresentationSlidePoint()">+ Add content point</button>
+              </div>
+              <label>Speaker notes<textarea rows="3" [ngModel]="slide.speakerNotes" (ngModelChange)="updatePresentationSlideNotes($event)"></textarea></label>
+            </section>
+            <section class="editor-group"><strong>Slide design</strong>
+              <label>Deck theme<select [ngModel]="deck.theme" (ngModelChange)="selectPresentationTheme($event)">
+                <option>Prism Blue</option><option>Neural Intelligence</option><option>Cinematic Product Launch</option><option>Executive Gold</option><option>Digital Blueprint</option><option>Immersive Storytelling</option><option>Knowledge Universe</option><option>Enterprise Light</option><option>Modern Minimal</option>
+              </select></label>
+              <label>Layout<select [ngModel]="slide.layoutType" (ngModelChange)="updatePresentationSlideLayout($event)">
+                <option>Hero</option><option>ExecutiveSummary</option><option>Problem</option><option>ProblemAndSolution</option><option>ComparisonMatrix</option><option>KPIDashboard</option><option>Workflow</option><option>DecisionTree</option><option>ArchitectureDiagram</option><option>DataFlow</option><option>Timeline</option><option>Roadmap</option><option>BarChart</option><option>LineChart</option><option>DonutChart</option><option>Conclusion</option><option>FeatureShowcase</option>
+              </select></label>
+              <label>Font<select [ngModel]="slide.fontFamily" (ngModelChange)="updatePresentationSlideDesign('fontFamily', $event)">
+                <option>Aptos</option><option>Arial</option><option>Calibri</option><option>Georgia</option><option>Inter</option><option>Noto Sans Tamil</option><option>Segoe UI</option><option>Verdana</option>
+              </select></label>
+              <div class="color-editor"><label>Background<input type="color" [ngModel]="slide.backgroundColor || '#ffffff'" (ngModelChange)="updatePresentationSlideDesign('backgroundColor', $event)"></label><label>Text<input type="color" [ngModel]="slide.textColor || '#142b52'" (ngModelChange)="updatePresentationSlideDesign('textColor', $event)"></label><label>Accent<input type="color" [ngModel]="slide.accentColor || '#ffc928'" (ngModelChange)="updatePresentationSlideDesign('accentColor', $event)"></label></div>
+              <label>Content size <input type="range" min="0.75" max="1.5" step="0.05" [ngModel]="slide.contentScale" (ngModelChange)="updatePresentationSlideDesign('contentScale', +$event)"></label>
+              <label>Alignment<select [ngModel]="slide.contentAlignment" (ngModelChange)="updatePresentationSlideDesign('contentAlignment', $event)"><option>Left</option><option>Center</option><option>Right</option></select></label>
+              <label>Spacing <input type="range" min="4" max="40" step="2" [ngModel]="slide.contentSpacing" (ngModelChange)="updatePresentationSlideDesign('contentSpacing', +$event)"></label>
+              <label>Add image<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" (change)="addPresentationImage($event)"></label>
+              @if (slide.imageDataUrl) { <button class="text-action danger-action" (click)="removePresentationImage()">Remove image</button> }
+              <small class="editor-hint">Images are embedded into the exported HTML and available offline.</small>
+            </section>
+            <section class="editor-group"><strong>Visuals and diagrams</strong>
+              @for (visual of slide.visualElements; track $index) {
+                <div class="visual-edit-row"><select [ngModel]="visual.type" (ngModelChange)="updatePresentationVisualElement($index, 'type', $event)"><option>Card</option><option>Stat</option><option>Callout</option><option>Icon</option></select><input [ngModel]="visual.label" (ngModelChange)="updatePresentationVisualElement($index, 'label', $event)" placeholder="Visual label"><input [ngModel]="visual.value" (ngModelChange)="updatePresentationVisualElement($index, 'value', $event)" [placeholder]="visual.type === 'Icon' ? 'Emoji or symbol' : 'Value or callout'"><button class="table-action danger-action" (click)="removePresentationVisualElement($index)" aria-label="Remove visual"><svg lucideTrash2></svg></button></div>
               }
-              <button class="text-action" (click)="addPresentationSlidePoint()">+ Add content point</button>
-            </div>
-            @if (slide.sourceReferences.length) { <div class="presentation-source-label"><strong>Source references</strong><span>@for (reference of slide.sourceReferences; track reference) { {{ reference }}<br> }</span></div> }
+              <button class="text-action" [disabled]="slide.visualElements.length >= 6" (click)="addPresentationVisualElement()">+ Add visual card</button>
+              <label>Mermaid diagram<textarea rows="5" [ngModel]="slide.diagram?.mermaid || ''" (ngModelChange)="updatePresentationDiagram($event)" placeholder="flowchart TD&#10; A[Start] --> B{Decision}"></textarea></label>
+              <label>Chart data (JSON)<textarea rows="5" [ngModel]="presentationChartJson(slide)" (ngModelChange)="updatePresentationChartJson($event)" placeholder='{"type":"Bar","labels":["A","B"],"values":[3,5]}'></textarea></label>
+              <label>Table data (JSON)<textarea rows="5" [ngModel]="presentationTableJson(slide)" (ngModelChange)="updatePresentationTableJson($event)" placeholder='{"headers":["Phase","Owner"],"rows":[["Plan","Team A"]]}'></textarea></label>
+              @if (!slide.table) { <button class="text-action" (click)="addPresentationTableTemplate()">+ Add table</button> }
+              @else { <button class="text-action danger-action" (click)="updatePresentationTableJson('')">Remove table</button> }
+              @if (slide.sourceReferences.length) { <div class="presentation-source-label"><strong>Source references</strong><span>@for (reference of slide.sourceReferences; track reference) { {{ reference }}<br> }</span></div> }
+            </section>
+            <section class="editor-group ai-edit-panel"><strong>AI design assistant</strong>
+              <label>Editing scope<select [ngModel]="aiEditScope()" (ngModelChange)="setPresentationEditScope($event)">
+                <option value="SelectedElement">Selected element</option><option value="SelectedSlide">Selected slide</option><option value="SelectedSlides">Selected slides</option><option value="EntirePresentation">Entire presentation</option>
+              </select></label>
+              @if (aiEditScope() === 'SelectedElement') {
+                <label>Element<select [ngModel]="aiEditElement()" (ngModelChange)="aiEditElement.set($event)">
+                  <option>Title</option><option>Subtitle</option><option>Content</option><option>LayoutType</option><option>VisualElements</option><option>Diagram</option><option>Chart</option><option>SpeakerNotes</option>
+                </select></label>
+              }
+              @if (aiEditScope() === 'SelectedSlides') { <small>{{ selectedPresentationSlides().length }} slides selected in the thumbnail list.</small> }
+              <label>Your instruction<textarea rows="5" [ngModel]="aiEditInstruction()" (ngModelChange)="aiEditInstruction.set($event)" placeholder="e.g. Make this slide more executive-friendly and replace the text with a practical branching workflow."></textarea></label>
+              <small>AI analyzes only the chosen scope. Its changes stay pending until you accept.</small>
+              @if (aiEditError()) { <div class="api-error">{{ aiEditError() }}</div> }
+              <button class="button button-primary ai-edit-button" [disabled]="aiEditLoading()" (click)="proposeAiPresentationEdit()">@if (aiEditLoading()) { <span class="button-spinner"></span> Preparing proposal… } @else { <svg lucideSparkles></svg> Suggest changes }</button>
+              @if (aiEditProposal(); as proposal) {
+                <div class="ai-proposal-card"><strong>Proposed changes</strong><p>{{ proposal.summary }}</p><small>{{ proposal.provider }} · {{ proposal.model }} · {{ proposal.sectionIds.length }} slide(s)</small>
+                  @for (sectionId of proposal.sectionIds; track sectionId) {
+                    @let beforeSlide = proposal.before.slides.find(item => item.sectionId === sectionId);
+                    @let afterSlide = proposal.after.slides.find(item => item.sectionId === sectionId);
+                    @if (beforeSlide && afterSlide) {
+                      <details><summary>{{ afterSlide.title }}</summary><div class="proposal-diff"><div><small>Before</small><p>{{ beforeSlide.title }}</p><p>{{ beforeSlide.subtitle }}</p>@for (point of beforeSlide.content; track $index) { <p>{{ point }}</p> }</div><div><small>After</small><p>{{ afterSlide.title }}</p><p>{{ afterSlide.subtitle }}</p>@for (point of afterSlide.content; track $index) { <p>{{ point }}</p> }</div></div></details>
+                    }
+                  }
+                  <div class="proposal-actions"><button class="button button-primary" (click)="acceptAiPresentationEdit()">Accept</button><button class="button button-secondary" (click)="rejectAiPresentationEdit()">Reject</button></div>
+                </div>
+              }
+            </section>
+            <section class="editor-group"><strong>Versions</strong>
+              @if (presentationOriginal()) { <button class="text-action" (click)="restoreOriginalPresentation()">Restore original AI draft</button> }
+              @for (version of presentationVersions(); track version.id) {
+                <div class="version-row"><span><strong>{{ version.label }}</strong><small>{{ version.createdAt | date:'short' }}</small></span><button class="text-action" (click)="comparePresentationVersion(version)">Compare</button><button class="text-action" (click)="restorePresentationVersion(version)">Restore</button></div>
+              }
+              @if (presentationCompareVersion(); as version) {
+                @let beforeSlide = version.presentation.slides[presentationPreviewIndex()];
+                @let currentSlide = deck.slides[presentationPreviewIndex()];
+                <div class="version-compare"><strong>Before / current</strong><small>{{ version.label }} · {{ version.createdAt | date:'short' }}</small>
+                  @if (beforeSlide && currentSlide) {
+                    <div class="proposal-diff"><div><small>Before</small><p>{{ beforeSlide.title }}</p><p>{{ beforeSlide.subtitle }}</p>@for (point of beforeSlide.content; track $index) { <p>{{ point }}</p> }</div><div><small>Current</small><p>{{ currentSlide.title }}</p><p>{{ currentSlide.subtitle }}</p>@for (point of currentSlide.content; track $index) { <p>{{ point }}</p> }</div></div>
+                  }
+                  <button class="text-action" (click)="presentationCompareVersion.set(null)">Close comparison</button>
+                </div>
+              }
+            </section>
           </div>
-        </section>
-      }
+          </aside>
+        }
+      </section>
 
       <section class="panel presentation-history"><div class="panel-heading"><div><h2>Presentation history</h2><p>Saved presentations in this API session</p></div></div><div class="presentation-history-list">@for (item of presentationHistory(); track item.id) { <div class="presentation-history-row"><span class="file-type-icon"><svg lucidePresentation></svg></span><span><strong>{{ item.title }}</strong><small>{{ item.sourceType }} · {{ item.totalSlides }} slides · {{ item.aiProvider }}</small></span><div><button class="table-action" title="Preview" aria-label="Preview presentation" (click)="openPresentation(item)"><svg lucideEye></svg></button><button class="table-action" title="Download PPTX" aria-label="Download presentation PPTX" (click)="downloadPresentationPptx(item)"><svg lucideDownload></svg></button><button class="table-action danger-action" title="Delete" aria-label="Delete presentation" (click)="deletePresentation(item)"><svg lucideTrash2></svg></button></div></div> } @empty { <div class="empty-state compact-empty"><strong>No presentations yet</strong></div> }</div></section>
     }
@@ -641,8 +764,10 @@
         @if (presentationViewerMode() === 'Scroll') {
           <div class="presentation-scroll-viewer">
             @for (slide of presentation()?.slides ?? []; track slide.slideNumber) {
-              <article class="scroll-story-section" [ngClass]="presentationThemeClass(presentation()?.theme)">
+              <article class="scroll-story-section" [ngClass]="presentationThemeClass(presentation()?.theme)"
+                [style.background-color]="slide.backgroundColor || null" [style.color]="slide.textColor || null" [style.font-family]="slide.fontFamily">
                 <span>{{ slide.slideNumber }}</span>
+                @if (slide.imageDataUrl) { <img class="viewer-slide-image" [src]="slide.imageDataUrl" [alt]="slide.title"> }
                 <h1>{{ slide.title }}</h1>
                 @if (slide.subtitle) { <p class="scroll-story-subtitle">{{ slide.subtitle }}</p> }
                 @for (item of slide.content; track $index) { <p class="scroll-story-point">{{ item }}</p> }
@@ -653,19 +778,26 @@
           <div class="presentation-viewer-stage">
             <span class="viewer-layout">{{ slide.layoutType }}</span>
             <div class="viewer-storyline"></div>
-            <div class="viewer-slide-content" [ngClass]="presentationLayoutClass(slide.layoutType)">
+            <div class="viewer-slide-content" [ngClass]="presentationLayoutClass(slide.layoutType)"
+              [attr.data-align]="slide.contentAlignment.toLowerCase()"
+              [style.background-color]="slide.backgroundColor || null" [style.color]="slide.textColor || null"
+              [style.font-family]="slide.fontFamily" [style.--content-scale]="slide.contentScale"
+              [style.text-align]="slide.contentAlignment.toLowerCase()" [style.gap.px]="slide.contentSpacing">
               <p class="viewer-kicker">{{ presentation()?.sourceType }} · {{ presentation()?.targetAudience }}</p>
+              @if (slide.imageDataUrl) { <img class="viewer-slide-image" [src]="slide.imageDataUrl" [alt]="slide.title"> }
               <h1>{{ slide.title }}</h1>
-              @if (slide.subtitle) { <p class="viewer-subtitle">{{ slide.subtitle }}</p> }
+              @if (slide.subtitle) { <p class="viewer-subtitle" [style.color]="slide.textColor || null">{{ slide.subtitle }}</p> }
               <div class="viewer-content-list">
                 @for (item of slide.content; track $index) { <p><i></i><span>{{ item }}</span></p> }
               </div>
               @if (slide.visualElements.length) {
                 <div class="viewer-kpi-grid">
-                  @for (visual of slide.visualElements; track visual.label) { <div><small>{{ visual.label }}</small><strong>{{ visual.value }}</strong></div> }
+                  @for (visual of slide.visualElements; track visual.label) { <div>@if (visual.type === 'Icon') { <span class="visual-icon">{{ visual.value }}</span><small>{{ visual.label }}</small> } @else { <small>{{ visual.label }}</small><strong>{{ visual.value }}</strong> }</div> }
                 </div>
               }
-              @if (slide.diagram) { <div class="viewer-diagram"><strong>{{ slide.diagram.type }}</strong><code>{{ slide.diagram.mermaid }}</code></div> }
+              @if (slide.diagram) { <div class="viewer-diagram"><strong>{{ slide.diagram.type }}</strong><app-presentation-diagram [mermaid]="slide.diagram.mermaid"></app-presentation-diagram></div> }
+              @if (slide.chart) { <div class="viewer-chart"><app-presentation-chart [chart]="slide.chart"></app-presentation-chart></div> }
+              @if (slide.table) { <div class="viewer-chart"><app-presentation-table [table]="slide.table"></app-presentation-table></div> }
             </div>
           </div>
         }
@@ -734,6 +866,8 @@
   }
 
 </main>
+</div>
+</div>
 
 @if (cloudConsentDialogOpen()) {
   <div class="consent-backdrop" (click)="cancelCloudConsent()">

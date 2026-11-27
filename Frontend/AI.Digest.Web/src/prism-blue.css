@@ -1,0 +1,174 @@
+:root {
+  --dd-navy: #061b40;
+  --dd-deep-navy: #03142e;
+  --dd-secondary-navy: #0b2d59;
+  --dd-royal-blue: #0756b5;
+  --dd-electric-blue: #008ff5;
+  --dd-cyan: #00cbe8;
+  --dd-teal: #00b5b8;
+  --dd-background: #f3f7fd;
+  --dd-card: #ffffff;
+  --dd-text: #10234d;
+  --dd-muted: #64748b;
+  --dd-border: #dce7f5;
+  --dd-success: #10a88a;
+  --dd-warning: #ffb547;
+  --dd-danger: #ff5349;
+  --dd-font: "DM Sans", Inter, "Noto Sans Tamil", "Nirmala UI", Latha, system-ui, sans-serif;
+  --dd-header-gradient: linear-gradient(110deg, var(--dd-deep-navy), var(--dd-navy) 62%, var(--dd-secondary-navy));
+  --dd-accent-gradient: linear-gradient(105deg, var(--dd-royal-blue), var(--dd-electric-blue));
+  --dd-slide-gradient: linear-gradient(135deg, var(--dd-card), var(--dd-background));
+  --dd-shadow: 0 8px 24px rgb(14 59 107 / 5%);
+}
+
+body.theme-prism,
+.presentation-viewer.theme-prism {
+  --bg: var(--dd-background);
+  --fg: var(--dd-text);
+  --muted: var(--dd-muted);
+  --panel: rgb(255 255 255 / 90%);
+  --line: var(--dd-border);
+  --accent: var(--dd-cyan);
+  color-scheme: light;
+  color: var(--dd-text);
+  font-family: var(--dd-font);
+}
+
+body.theme-prism {
+  background:
+    radial-gradient(ellipse at 82% 8%, rgb(0 203 232 / 16%), transparent 27%),
+    radial-gradient(ellipse at 12% 90%, rgb(0 143 245 / 10%), transparent 31%),
+    linear-gradient(145deg, var(--dd-background), #eaf5ff 58%, #fff);
+}
+
+body.theme-prism #toolbar {
+  border-color: rgb(196 221 255 / 16%);
+  background:
+    radial-gradient(ellipse at 80% -70%, rgb(0 203 232 / 25%), transparent 45%),
+    var(--dd-header-gradient);
+  color: #f7fbff;
+}
+
+body.theme-prism #deck-title { color: #f7fbff; }
+body.theme-prism .control {
+  border-color: rgb(196 221 255 / 20%);
+  background: rgb(255 255 255 / 8%);
+  color: #eaf5ff;
+}
+body.theme-prism .control:hover,
+body.theme-prism .control:focus-visible {
+  outline-color: var(--dd-cyan);
+  background: rgb(0 203 232 / 15%);
+}
+body.theme-prism #footer {
+  border-color: var(--dd-border);
+  background: rgb(255 255 255 / 86%);
+}
+body.theme-prism #progress i { background: linear-gradient(90deg, var(--dd-electric-blue), var(--dd-cyan)); }
+body.theme-prism .slide {
+  border-color: #d6e8fa;
+  background: var(--slide-bg,
+    radial-gradient(circle at 97% 5%, rgb(0 203 232 / 10%), transparent 29%),
+    linear-gradient(135deg, #fff, #f3f9ff));
+  box-shadow: 0 28px 80px rgb(7 86 181 / 10%);
+  font-family: var(--dd-font);
+}
+body.theme-prism .slide::before { background: linear-gradient(180deg, var(--dd-electric-blue), var(--dd-cyan)); }
+body.theme-prism .slide::after {
+  border-color: rgb(0 143 245 / 16%);
+  box-shadow: 0 0 0 44px rgb(0 143 245 / 3.5%), 0 0 0 88px rgb(0 203 232 / 3.5%);
+}
+body.theme-prism .kicker { color: var(--dd-royal-blue); }
+body.theme-prism .point::before {
+  background: var(--dd-accent-gradient);
+  box-shadow: 0 0 0 5px rgb(0 143 245 / 12%);
+}
+body.theme-prism .visual {
+  border-color: var(--dd-border);
+  background: var(--dd-slide-gradient);
+  box-shadow: 0 6px 16px rgb(7 86 181 / 6%);
+}
+body.theme-prism .visual strong { color: var(--dd-royal-blue); }
+body.theme-prism .visual-icon,
+.presentation-viewer.theme-prism .visual-icon,
+.slide-canvas.theme-prism .visual-icon {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: var(--dd-accent-gradient);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 800;
+}
+body.theme-prism .slide,
+body.theme-prism .slide h1,
+body.theme-prism .slide .subtitle,
+body.theme-prism .slide .point,
+body.theme-prism .slide .visual,
+body.theme-prism .slide .sources { overflow-wrap: anywhere; word-break: normal; }
+
+.presentation-viewer.theme-prism {
+  background:
+    radial-gradient(ellipse at 82% 8%, rgb(0 203 232 / 14%), transparent 26%),
+    radial-gradient(ellipse at 12% 95%, rgb(0 143 245 / 10%), transparent 30%),
+    linear-gradient(145deg, var(--dd-background), #eaf5ff 58%, #fff);
+}
+.presentation-viewer.theme-prism .presentation-viewer-top {
+  border-color: rgb(196 221 255 / 18%);
+  background: var(--dd-header-gradient);
+  color: #f7fbff;
+}
+.presentation-viewer.theme-prism .viewer-title span { color: #a9c5e3; }
+.presentation-viewer.theme-prism .viewer-chip,
+.presentation-viewer.theme-prism .viewer-icon {
+  border-color: rgb(196 221 255 / 18%);
+  background: rgb(255 255 255 / 7%);
+  color: #eaf5ff;
+}
+.presentation-viewer.theme-prism .viewer-chip:hover,
+.presentation-viewer.theme-prism .viewer-icon:hover { background: rgb(0 203 232 / 15%); }
+.presentation-viewer.theme-prism .viewer-kicker { color: var(--dd-royal-blue); }
+.presentation-viewer.theme-prism .viewer-content-list i {
+  background: var(--dd-accent-gradient);
+  box-shadow: 0 0 0 5px rgb(0 143 245 / 11%);
+}
+.presentation-viewer.theme-prism .viewer-kpi-grid div {
+  border-color: var(--dd-border);
+  background: rgb(255 255 255 / 87%);
+  box-shadow: 0 9px 22px rgb(7 86 181 / 7%);
+}
+.presentation-viewer.theme-prism .viewer-kpi-grid small { color: var(--dd-muted); }
+.presentation-viewer.theme-prism .presentation-progress { background: rgb(7 86 181 / 14%); }
+.presentation-viewer.theme-prism .presentation-progress span { background: var(--dd-accent-gradient); }
+.slide-canvas.theme-prism {
+  border-color: #d8e8f6;
+  background:
+    radial-gradient(circle at 94% 7%, rgb(0 203 232 / 12%), transparent 29%),
+    linear-gradient(135deg, #fff, #f3f9ff);
+}
+.slide-canvas.theme-prism .slide-accent { background: linear-gradient(180deg, var(--dd-electric-blue), var(--dd-cyan)); }
+.slide-canvas.theme-prism .slide-kpi-grid div {
+  border-color: var(--dd-border);
+  background: var(--dd-slide-gradient);
+  box-shadow: 0 5px 14px rgb(7 86 181 / 6%);
+}
+.slide-canvas.theme-prism .slide-kpi-grid strong { color: var(--dd-royal-blue); }
+.slide-canvas.theme-prism .slide-content-list i { background: var(--dd-accent-gradient); }
+.presentation-viewer.theme-prism .diagram-edge,
+.slide-canvas.theme-prism .diagram-edge,
+body.theme-prism .diagram-edge { stroke: var(--dd-electric-blue); }
+.presentation-viewer.theme-prism .diagram-node rect,
+.presentation-viewer.theme-prism .diagram-node polygon,
+.slide-canvas.theme-prism .diagram-node rect,
+.slide-canvas.theme-prism .diagram-node polygon,
+body.theme-prism .diagram-node rect,
+body.theme-prism .diagram-node polygon { fill: #fff; stroke: var(--dd-teal); }
+.presentation-viewer.theme-prism .diagram-node text,
+.slide-canvas.theme-prism .diagram-node text,
+body.theme-prism .diagram-node text,
+.presentation-viewer.theme-prism .diagram-edge-label,
+.slide-canvas.theme-prism .diagram-edge-label,
+body.theme-prism .diagram-edge-label { fill: var(--dd-navy); }

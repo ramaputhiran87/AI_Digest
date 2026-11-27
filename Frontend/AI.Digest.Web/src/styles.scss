@@ -1,7 +1,8 @@
+@use "prism-blue.css";
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
-:root { color-scheme: light; --navy:#142b52; --ink:#172b4d; --muted:#64748b; --line:#e7edf5; }
+:root { color-scheme: light; --navy:var(--dd-navy); --ink:var(--dd-text); --muted:var(--dd-muted); --line:var(--dd-border); }
 * { box-sizing:border-box; }
 html { min-width:320px; scroll-behavior:smooth; }
-body { margin:0; min-width:320px; font-family:"DM Sans",Inter,system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink); background:#f4f7fc; }
+body { margin:0; min-width:320px; font-family:var(--dd-font); color:var(--ink); background:var(--dd-background); }
 button,input,textarea,select { font:inherit; }
 button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,summary:focus-visible { outline:3px solid rgba(37,99,235,.35); outline-offset:2px; }

@@ -56,21 +56,32 @@ The API keeps the existing digest fields and adds the standardized `success`, `p
 
 ## Presentation Studio
 
-The Presentation Studio accepts Markdown/TXT uploads, public GitHub repository URLs, authorized remote application URLs, and use-case descriptions. Select a source in the Angular UI, configure title/audience/purpose/slide count/aspect ratio/options, and generate an editable PPTX plus PDF.
+The Presentation Studio accepts Markdown/TXT uploads, public GitHub repository URLs, authorized remote application URLs, and use-case descriptions. Select a source in the Angular UI, configure title/audience/purpose/slide count/aspect ratio/options, and generate an editable PPTX, PDF, and interactive standalone HTML.
+
+The interactive preview and standalone HTML export render Mermaid flowchart edges as an SVG graph, preserving supported node connections, decision diamonds, direction and labeled branches without a CDN. Source-backed bar, line and donut/pie chart data is rendered as SVG as well. If a diagram uses unsupported Mermaid syntax, its source is shown as a fallback rather than being misrepresented as a sequential workflow. Diagrams remain source-derived; generated architecture must not be interpreted as verified infrastructure unless the source supports it.
+
+The portal and standalone HTML viewer share the Prism Blue design tokens in `Frontend/AI.Digest.Web/src/prism-blue.css`. Prism Blue is the default presentation theme; the offline viewer embeds these tokens and its rendering code without a CDN. It includes a navy/cyan control bar, responsive slide canvases, source-backed charts, safe SVG diagrams and tables, keyboard navigation, optional progressive reveal, overview, notes, timer, and scroll mode. Unicode content is exported as UTF-8 with a language tag and Tamil-friendly system font fallbacks.
+
+The presentation workspace accepts user storytelling/design instructions, language, visual intensity, and configurable diagram/chart/recommendation options. Its editor provides live title, subtitle, content, notes, layout, font, color, size, spacing, alignment, image, chart-data, table-data, Mermaid, and visual-card/icon editing. Tables are validated for bounded dimensions and rendered in both the editor and offline HTML export. Slides can be inserted, duplicated, deleted, drag-reordered, and multi-selected. The preview has zoom and alignment guides. Manual changes auto-save to the API session, can be undone/redone, and are tracked in presentation versions with compare and restore actions. AI edits are proposals: choose an element, one slide, selected slides, or the whole deck, describe the requested change, then accept or reject the result. The editor sends only the selected slides to the AI editing endpoint; the API validates slide identities and merges only the selected scope. Cloud AI consent and configured provider availability are required.
 
 Presentation API endpoints:
 
 | Method | Endpoint | Purpose |
 |---|---|---|
 | POST | `/api/presentations/preview` | Generate or preview a presentation |
+| POST | `/api/presentations/{id}/edit` | Request a scoped AI edit proposal |
 | GET | `/api/presentations` | List API-session presentation history |
 | GET | `/api/presentations/{id}` | Retrieve a presentation |
 | PUT | `/api/presentations/{id}` | Save preview edits |
+| GET | `/api/presentations/{id}/versions` | List saved presentation versions |
+| GET | `/api/presentations/{id}/versions/{versionId}` | Retrieve a version for comparison |
+| POST | `/api/presentations/{id}/versions/{versionId}/restore` | Restore a saved version |
 | GET | `/api/presentations/{id}/pptx` | Download editable PPTX |
 | GET | `/api/presentations/{id}/pdf` | Download PDF |
+| GET | `/api/presentations/{id}/html` | Download standalone interactive HTML |
 | DELETE | `/api/presentations/{id}` | Delete presentation |
 
-GitHub access can use `GitHub__Token` for private repositories. Application URL inspection rejects loopback, private networks, cloud metadata ranges, and unvalidated schemes by default. Use a remote HTTPS application URL or explicitly authorized browser integration for local application inspection. The output uses the AI_Digest navy, blue, white and yellow design tokens.
+GitHub access can use `GitHub__Token` for private repositories. Application URL inspection rejects loopback, private networks, cloud metadata ranges, and unvalidated schemes by default. Use a remote HTTPS application URL or explicitly authorized browser integration for local application inspection. The portal uses the shared Prism Blue navy, electric-blue, cyan and teal design tokens.
 
 ## Run the application
 

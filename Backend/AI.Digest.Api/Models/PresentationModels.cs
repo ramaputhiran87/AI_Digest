@@ -15,13 +15,22 @@ public sealed class PresentationRequest
     public string Duration { get; init; } = "15 minutes";
     public string PresentationStyle { get; init; } = "Visual storytelling";
     public string ContentDepth { get; init; } = "Standard";
-    public string Theme { get; init; } = "Auto";
+    public string Theme { get; init; } = "Prism Blue";
     public int SlideCount { get; init; } = 10;
     public string Language { get; init; } = "English";
     public string AspectRatio { get; init; } = "16:9";
+    public string UserInstructions { get; init; } = "";
+    public string VisualIntensity { get; init; } = "Balanced";
     public bool IncludeSpeakerNotes { get; init; } = true;
     public bool IncludeArchitectureDiagrams { get; init; } = true;
     public bool IncludeScreenshots { get; init; } = true;
+    public bool IncludeFlowcharts { get; init; } = true;
+    public bool IncludeDataFlowDiagrams { get; init; } = true;
+    public bool IncludeCharts { get; init; } = true;
+    public bool IncludeProblemSolution { get; init; } = true;
+    public bool IncludeTechnicalDetails { get; init; } = true;
+    public bool IncludeBusinessRecommendations { get; init; } = true;
+    public bool IncludeRoadmap { get; init; } = true;
     public string? CloudConsentScope { get; init; }
     public string? CloudConsentPolicyVersion { get; init; }
     [JsonIgnore]
@@ -44,8 +53,9 @@ public sealed class PresentationDocument
     public string SourceType { get; init; } = "";
     public string SourceReference { get; init; } = "";
     public string TargetAudience { get; init; } = "";
-    public string Theme { get; init; } = "AI_Digest Navy Blue";
+    public string Theme { get; init; } = "Prism Blue";
     public string ThemeRecommendation { get; init; } = "";
+    public string Language { get; init; } = "English";
     public string AspectRatio { get; init; } = "16:9";
     public int TotalSlides { get; init; }
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
@@ -66,9 +76,61 @@ public sealed class PresentationSlide
     public List<PresentationVisualElement> VisualElements { get; init; } = [];
     public PresentationDiagram? Diagram { get; init; }
     public PresentationChart? Chart { get; init; }
+    public PresentationTable? Table { get; init; }
     public List<string> ScreenshotReferences { get; init; } = [];
     public string SpeakerNotes { get; init; } = "";
     public List<string> SourceReferences { get; init; } = [];
+    public string FontFamily { get; init; } = "Aptos";
+    public string BackgroundColor { get; init; } = "";
+    public string TextColor { get; init; } = "";
+    public string AccentColor { get; init; } = "";
+    public double ContentScale { get; init; } = 1;
+    public string ContentAlignment { get; init; } = "Left";
+    public double ContentSpacing { get; init; } = 14;
+    public string? ImageDataUrl { get; init; }
+}
+
+public sealed class PresentationEditRequest
+{
+    public string Instruction { get; init; } = "";
+    public string Scope { get; init; } = "SelectedSlide";
+    public List<string> SectionIds { get; init; } = [];
+    public string? Element { get; init; }
+    public string? CloudConsentScope { get; init; }
+    public string? CloudConsentPolicyVersion { get; init; }
+    public PresentationDocument Presentation { get; init; } = new();
+}
+
+public sealed class PresentationEditPlan
+{
+    public string Summary { get; init; } = "";
+    public string? Title { get; init; }
+    public string? TargetAudience { get; init; }
+    public string? Theme { get; init; }
+    public List<PresentationSlide> Slides { get; init; } = [];
+}
+
+public sealed class PresentationEditProposal
+{
+    public string Summary { get; init; } = "";
+    public string Provider { get; init; } = "";
+    public string Model { get; init; } = "";
+    public PresentationDocument Presentation { get; init; } = new();
+}
+
+public sealed class PresentationVersion
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+    public string Label { get; init; } = "";
+    public PresentationDocument Presentation { get; init; } = new();
+}
+
+public sealed class PresentationVersionSummary
+{
+    public Guid Id { get; init; }
+    public DateTimeOffset CreatedAt { get; init; }
+    public string Label { get; init; } = "";
 }
 
 public sealed class PresentationVisualElement
@@ -89,6 +151,12 @@ public sealed class PresentationChart
     public string Type { get; init; } = "Bar";
     public List<string> Labels { get; init; } = [];
     public List<double> Values { get; init; } = [];
+}
+
+public sealed class PresentationTable
+{
+    public List<string> Headers { get; init; } = [];
+    public List<List<string>> Rows { get; init; } = [];
 }
 
 public sealed class PresentationExportResult

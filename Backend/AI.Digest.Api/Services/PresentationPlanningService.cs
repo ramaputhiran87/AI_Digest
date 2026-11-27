@@ -14,7 +14,8 @@ public sealed class PresentationPlanningService(
         "Executive Gold",
         "Digital Blueprint",
         "Immersive Storytelling",
-        "Knowledge Universe"
+        "Knowledge Universe",
+        "Prism Blue"
     ];
 
     public async Task<PresentationDocument> PlanAsync(
@@ -56,21 +57,40 @@ public sealed class PresentationPlanningService(
             Duration: {{request.Duration}}
             Presentation style: {{request.PresentationStyle}}
             Content depth: {{request.ContentDepth}}
-            Theme: {{(automaticTheme ? "Recommend the best match from the six supported themes." : $"Use this manually selected theme: {themeSelection}")}}
+            Visual intensity: {{request.VisualIntensity}}
+            Theme: {{(automaticTheme ? "Recommend the best match from the supported themes." : $"Use this manually selected theme: {themeSelection}")}}
             Language: {{request.Language}}
             Aspect ratio: {{request.AspectRatio}}
+            Include flowcharts: {{request.IncludeFlowcharts}}
+            Include data flow diagrams: {{request.IncludeDataFlowDiagrams}}
+            Include charts and infographics: {{request.IncludeCharts}}
+            Include problem-and-solution comparisons: {{request.IncludeProblemSolution}}
+            Include technical details: {{request.IncludeTechnicalDetails}}
+            Include business recommendations: {{request.IncludeBusinessRecommendations}}
+            Include implementation roadmap: {{request.IncludeRoadmap}}
             Include speaker notes: {{request.IncludeSpeakerNotes}}
             Include architecture diagrams: {{request.IncludeArchitectureDiagrams}}
             Include application screenshots: {{request.IncludeScreenshots}}
+            User presentation ideas and design preferences (apply where they fit the source):
+            {{request.UserInstructions}}
             Source type: {{source.SourceType}}
             Source reference: {{source.SourceReference}}
 
             Select an adaptive narrative, strong opening hook, section layouts, and visual storytelling
-            style from the actual source. Avoid repeated bullet-card layouts. Use interactive architecture,
-            workflows, comparisons, timelines, diagrams, or data visuals only when supported by the source.
-            Suitable layouts include Hero, Problem, Solution, FeatureShowcase, UserJourney, Workflow,
-            ArchitectureDiagram, Blueprint, Comparison, Roadmap, Insight, Conclusion, and QandA.
+            style from the actual source. Avoid repeated bullet-card layouts and use at most three short
+            content points per slide. Assign a specific visual layout when the evidence supports it:
+            Hero, ExecutiveSummary, Problem, ProblemAndSolution, FeatureShowcase, KPIDashboard,
+            UserJourney, Workflow, DecisionTree, Swimlane, SequenceDiagram, ArchitectureDiagram,
+            DataFlow, IntegrationArchitecture, SecurityArchitecture, TechnologyStack, BusinessEcosystem,
+            ComparisonMatrix, Roadmap, Timeline, BarChart, LineChart, DonutChart, FunnelChart, Insight,
+            Conclusion, or QandA. A decision or branching process must be a real Mermaid flowchart with
+            explicit decision nodes, labeled outgoing paths, and source-supported relationships, not a
+            sequence of boxes. Use charts only for source-supported numeric values; identify units and
+            label assumptions explicitly rather than presenting them as observed results.
             Pick one recommended theme from: {{string.Join(", ", PremiumThemes)}}.
+            Treat the user ideas above as the requested storytelling/design direction. Keep factual claims,
+            metrics, and architecture grounded in source content. If an option is disabled, do not add that
+            kind of slide or visual. Visual intensity controls the amount of decoration, not factual emphasis.
 
             Create this JSON object:
             {
@@ -86,12 +106,13 @@ public sealed class PresentationPlanningService(
                 "visualElements":[{"type":"Card","label":"Label","value":"Value"}],
                 "diagram":{"type":"Workflow","mermaid":"flowchart TD\n A[Source] --> B[Result]"},
                 "chart":{"type":"Bar","labels":["A","B"],"values":[1,2]},
+                "table":{"headers":["Phase","Owner"],"rows":[["Plan","Team A"]]},
                 "speakerNotes":"presentation narration grounded in the slide",
                 "sourceReferences":["source file or section name"]
               }]
             }
 
-            Return exactly {{slideCount}} slides. Keep each section concise: at most five short points and no
+            Return exactly {{slideCount}} slides. Keep each section concise: at most three short points and no
             paragraph longer than 220 characters. Prefer meaningful layouts and vary the visual rhythm.
             Only provide chart data or metrics that appear in the source. Never fabricate analytics.
             Architecture diagrams and workflows must reflect source facts and include source references.
@@ -145,8 +166,9 @@ public sealed class PresentationPlanningService(
                     LayoutType = slide.LayoutType,
                     Content = slide.Content.Take(5).Select(item => item.Trim()).Where(item => item.Length > 0).ToList(),
                     VisualElements = slide.VisualElements.Take(6).ToList(),
-                    Diagram = request.IncludeArchitectureDiagrams ? slide.Diagram : null,
-                    Chart = slide.Chart,
+                    Diagram = IncludeDiagram(slide.Diagram, request) ? slide.Diagram : null,
+                    Chart = request.IncludeCharts ? slide.Chart : null,
+                    Table = slide.Table,
                     ScreenshotReferences = request.IncludeScreenshots ? slide.ScreenshotReferences : [],
                     SpeakerNotes = request.IncludeSpeakerNotes ? slide.SpeakerNotes : "",
                     SourceReferences = slide.SourceReferences.Take(10).ToList()
@@ -163,6 +185,7 @@ public sealed class PresentationPlanningService(
             TargetAudience = request.TargetAudience,
             Theme = theme,
             ThemeRecommendation = recommendedTheme,
+            Language = request.Language,
             AspectRatio = request.AspectRatio,
             TotalSlides = slides.Count,
             AIProvider = inference.ProviderName,
@@ -189,7 +212,23 @@ public sealed class PresentationPlanningService(
             return "Cinematic Product Launch";
         if (source.SourceType.Equals("UseCase", StringComparison.OrdinalIgnoreCase))
             return "Immersive Storytelling";
-        return "Knowledge Universe";
+        return "Prism Blue";
+    }
+
+    private static bool IncludeDiagram(PresentationDiagram? diagram, PresentationRequest request)
+    {
+        if (diagram is null)
+            return false;
+        var type = $"{diagram.Type} {diagram.Mermaid}".ToLowerInvariant();
+        if (type.Contains("data flow") || type.Contains("dataflow"))
+            return request.IncludeDataFlowDiagrams;
+        if (type.Contains("architecture") || type.Contains("integration"))
+            return request.IncludeArchitectureDiagrams;
+        if (type.Contains("flow") || type.Contains("workflow") ||
+            type.Contains("decision") || type.Contains("swimlane") ||
+            type.Contains("sequence"))
+            return request.IncludeFlowcharts;
+        return request.IncludeArchitectureDiagrams || request.IncludeFlowcharts;
     }
 
     private sealed class PresentationPlan
@@ -210,6 +249,7 @@ public sealed class PresentationPlanningService(
         public List<PresentationVisualElement> VisualElements { get; init; } = [];
         public PresentationDiagram? Diagram { get; init; }
         public PresentationChart? Chart { get; init; }
+        public PresentationTable? Table { get; init; }
         public List<string> ScreenshotReferences { get; init; } = [];
         public string SpeakerNotes { get; init; } = "";
         public List<string> SourceReferences { get; init; } = [];
