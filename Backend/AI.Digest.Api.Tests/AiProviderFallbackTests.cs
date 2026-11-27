@@ -158,9 +158,11 @@ public sealed class AiProviderFallbackTests
         var client = new StaticAiModelClient(JsonSerializer.Serialize(new
         {
             description = "A source-grounded overview.",
+            recommendedTheme = "Neural Intelligence",
             slides = Enumerable.Range(1, 5)
                 .Select(slideNumber => new
                 {
+                    sectionId = $"section-{slideNumber}",
                     slideNumber,
                     title = $"Slide {slideNumber}"
                 })
@@ -174,12 +176,15 @@ public sealed class AiProviderFallbackTests
             configuration, inferenceRouter, providerConfiguration);
 
         var presentation = await planner.PlanAsync(
-            new PresentationRequest { SlideCount = 5 },
+            new PresentationRequest { SlideCount = 5, Theme = "Auto" },
             new PresentationSource { Text = "The source describes a documented service." },
             CancellationToken.None);
 
         Assert.Equal("Google Gemini", presentation.AIProvider);
         Assert.Equal(5, presentation.Slides.Count);
+        Assert.Equal("Neural Intelligence", presentation.Theme);
+        Assert.Equal("Neural Intelligence", presentation.ThemeRecommendation);
+        Assert.Equal("section-1", presentation.Slides[0].SectionId);
     }
 
     [Fact]
@@ -353,6 +358,133 @@ public sealed class AiProviderFallbackTests
             "user-a", "doc.md", "content", null, null, false,
             () => Task.FromResult(new DigestResult()));
         Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task AnalysisCacheSeparatesAnalysisDepths()
+    {
+        using var memoryCache = new MemoryCache(new MemoryCacheOptions { SizeLimit = 10 });
+        var configuration = new ConfigurationBuilder().Build();
+        var cache = new AnalysisResultCache(memoryCache, configuration);
+        var calls = 0;
+        Task<DigestResult> Create()
+        {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult(new DigestResult());
+        }
+
+        await cache.GetOrCreateAsync("user-a", "doc.md", "content", null, null, true, Create, "Quick");
+        await cache.GetOrCreateAsync("user-a", "doc.md", "content", null, null, true, Create, "Smart");
+        await cache.GetOrCreateAsync("user-a", "doc.md", "content", null, null, true, Create, "Quick");
+
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task CancellingOneDuplicateAnalysisDoesNotCancelOtherWaiters()
+    {
+        using var memoryCache = new MemoryCache(new MemoryCacheOptions { SizeLimit = 10 });
+        var cache = new AnalysisResultCache(memoryCache, new ConfigurationBuilder().Build());
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<DigestResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var firstProgress = new List<AnalysisProgressEvent>();
+        var secondProgress = new List<AnalysisProgressEvent>();
+        async Task<DigestResult> Create(
+            CancellationToken cancellationToken,
+            IProgress<AnalysisProgressEvent>? progress)
+        {
+            Interlocked.Increment(ref calls);
+            started.TrySetResult();
+            progress?.Report(new AnalysisProgressEvent("AI inference", CompletedInferenceCalls: 1));
+            return await release.Task.WaitAsync(cancellationToken);
+        }
+
+        using var firstCancellation = new CancellationTokenSource();
+        using var secondCancellation = new CancellationTokenSource();
+        Func<CancellationToken, IProgress<AnalysisProgressEvent>?, Task<DigestResult>> factory = Create;
+        var first = cache.GetOrCreateAsync(
+            "user-a", "doc.md", "content", null, null, true,
+            factory, "Quick", firstCancellation.Token,
+            new InlineProgress<AnalysisProgressEvent>(firstProgress.Add));
+        var second = cache.GetOrCreateAsync(
+            "user-a", "doc.md", "content", null, null, true,
+            factory, "Quick", secondCancellation.Token,
+            new InlineProgress<AnalysisProgressEvent>(secondProgress.Add));
+        await started.Task;
+
+        firstCancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+        Assert.False(second.IsCompleted);
+        release.SetResult(new DigestResult { DocumentTitle = "doc.md" });
+
+        Assert.Equal("doc.md", (await second).DocumentTitle);
+        Assert.Equal(1, calls);
+        Assert.Contains(secondProgress, item => item.Stage == "AI inference");
+    }
+
+    [Fact]
+    public async Task SharedAnalysisCancelsWhenItsLastWaiterDisconnects()
+    {
+        using var memoryCache = new MemoryCache(new MemoryCacheOptions { SizeLimit = 10 });
+        var cache = new AnalysisResultCache(memoryCache, new ConfigurationBuilder().Build());
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var providerCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<DigestResult> Create(CancellationToken cancellationToken)
+        {
+            started.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                throw new InvalidOperationException("The delay should only end through cancellation.");
+            }
+            catch (OperationCanceledException)
+            {
+                providerCancelled.TrySetResult();
+                throw;
+            }
+        }
+
+        using var firstCancellation = new CancellationTokenSource();
+        using var secondCancellation = new CancellationTokenSource();
+        var first = cache.GetOrCreateAsync(
+            "user-a", "doc.md", "same", null, null, true,
+            Create, "Quick", firstCancellation.Token);
+        var second = cache.GetOrCreateAsync(
+            "user-a", "doc.md", "same", null, null, true,
+            Create, "Quick", secondCancellation.Token);
+        await started.Task;
+
+        firstCancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+        Assert.False(providerCancelled.Task.IsCompleted);
+        secondCancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => second);
+        await providerCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task PresentationSourceCanReuseCompletedAnalysisContext()
+    {
+        var sources = new PresentationSourceProviders(
+            new HttpClient(),
+            new ConfigurationBuilder().Build());
+        var context = """{"executiveSummary":"A tested analysis.","keyFindings":[]}""";
+
+        var source = await sources.GetSourceAsync(
+            new PresentationRequest
+            {
+                SourceType = "AnalysisResult",
+                SourceReference = "policy.md",
+                AnalysisContext = context
+            },
+            null,
+            CancellationToken.None);
+
+        Assert.Equal("AnalysisResult", source.SourceType);
+        Assert.Equal("policy.md", source.SourceReference);
+        Assert.Equal(context, source.Text);
     }
 
     [Fact]

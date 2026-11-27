@@ -10,7 +10,9 @@ public interface IAnalysisProvider
         string? useCase,
         CancellationToken cancellationToken,
         string? explicitMode = null,
-        bool allowCloudProcessing = false);
+        bool allowCloudProcessing = false,
+        string? analysisDepth = null,
+        IProgress<AnalysisProgressEvent>? progress = null);
 }
 
 public sealed record ProviderAnalysisResult(
@@ -68,7 +70,9 @@ public sealed class AnalysisProviderRouter(
         string? useCase,
         CancellationToken cancellationToken,
         string? explicitMode = null,
-        bool allowCloudProcessing = false)
+        bool allowCloudProcessing = false,
+        string? analysisDepth = null,
+        IProgress<AnalysisProgressEvent>? progress = null)
     {
         var mode = string.IsNullOrWhiteSpace(explicitMode)
             ? configuration["Analysis:Provider"] ?? "Configured"
@@ -166,7 +170,9 @@ public sealed class AnalysisProviderRouter(
             useCase,
             eligible[0].ProviderId,
             allowCloudProcessing,
-            timeout.Token);
+            timeout.Token,
+            analysisDepth,
+            progress);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {

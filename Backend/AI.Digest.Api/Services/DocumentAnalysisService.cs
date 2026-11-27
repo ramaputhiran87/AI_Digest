@@ -6,7 +6,9 @@ using AI.Digest.Api.Models;
 
 namespace AI.Digest.Api.Services;
 
-public sealed class DocumentAnalysisService(IAnalysisProvider provider)
+public sealed class DocumentAnalysisService(
+    IAnalysisProvider provider,
+    ILogger<DocumentAnalysisService>? logger = null)
 {
     public async Task<DigestResult> AnalyseAsync(
         string title,
@@ -14,7 +16,9 @@ public sealed class DocumentAnalysisService(IAnalysisProvider provider)
         string? useCase,
         CancellationToken cancellationToken = default,
         string? explicitMode = null,
-        bool allowCloudProcessing = false)
+        bool allowCloudProcessing = false,
+        string? analysisDepth = null,
+        IProgress<AnalysisProgressEvent>? progress = null)
     {
         if (string.IsNullOrWhiteSpace(content))
         {
@@ -23,9 +27,15 @@ public sealed class DocumentAnalysisService(IAnalysisProvider provider)
                 failureCode: AnalysisFailureCode.InvalidInput);
         }
 
+        var extractionTimer = System.Diagnostics.Stopwatch.StartNew();
         var document = Parse(title, content);
+        extractionTimer.Stop();
+        progress?.Report(new AnalysisProgressEvent(
+            "Document structure analysis",
+            Message: $"{document.Sections.Count} sections and {document.SourceLines.Count} source lines extracted."));
         var analysis = await provider.AnalyseAsync(
-            document, useCase, cancellationToken, explicitMode, allowCloudProcessing);
+            document, useCase, cancellationToken, explicitMode, allowCloudProcessing,
+            analysisDepth, progress);
         var all = analysis.Findings;
         all = all.Where(f => f.Evidence is not null)
             .GroupBy(f => $"{f.FindingType}:{f.AgentName}:{f.Evidence?.SourceText}")
@@ -110,6 +120,12 @@ public sealed class DocumentAnalysisService(IAnalysisProvider provider)
             Evidence = evidence,
             CompressedDocument = compressed
         };
+        logger?.LogInformation(
+            "Document content extraction completed. DocumentCharacters={DocumentCharacters} SourceLineCount={SourceLineCount} SectionCount={SectionCount} ExtractionDurationMilliseconds={ExtractionDurationMilliseconds}.",
+            content.Length,
+            document.SourceLines.Count,
+            document.Sections.Count,
+            extractionTimer.Elapsed.TotalMilliseconds);
         return result;
     }
 

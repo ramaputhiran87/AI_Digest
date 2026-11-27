@@ -85,7 +85,7 @@
       <div>
         <div class="eyebrow"><span class="eyebrow-dot"></span> INTELLIGENCE OVERVIEW</div>
         <h1>Welcome to AI Document Intelligence</h1>
-        <p>Analyze documents, identify risks and generate actionable insights.</p>
+        <p>Understand documents and use cases with clear, source-grounded insights.</p>
       </div>
       <button class="button button-primary" (click)="setTab('Document Analysis')">
         <svg lucideUpload></svg> New analysis <svg class="button-arrow" lucideArrowUpRight></svg>
@@ -149,10 +149,10 @@
         <small>Across successful analyses in this browser</small>
       </article>
       <article class="kpi-card">
-        <div class="kpi-top"><span class="kpi-icon icon-yellow"><svg lucideActivity></svg></span><span class="kpi-change" [class.down]="scoreChange() && !scoreChange()!.positive"><svg lucideTrendingUp></svg>{{ scoreChange()?.label ?? '—' }}</span></div>
-        <p>Average analysis score</p>
-        <div class="kpi-value">{{ averageScore() === null ? '—' : averageScore() + '%' }}</div>
-        <small>Confidence across successful analyses</small>
+        <div class="kpi-top"><span class="kpi-icon icon-yellow"><svg lucideActivity></svg></span><span class="kpi-change">Actual</span></div>
+        <p>AI inference calls</p>
+        <div class="kpi-value">{{ inferenceCallCount() }}</div>
+        <small>Reported by completed provider runs</small>
       </article>
     </section>
 
@@ -205,7 +205,7 @@
 
   @if (activeTab() === 'Document Analysis') {
     <section class="page-heading">
-      <div><div class="eyebrow"><span class="eyebrow-dot"></span> DOCUMENT WORKSPACE</div><h1>Document analysis</h1><p>Upload a document to surface evidence-backed insights and risks.</p></div>
+      <div><div class="eyebrow"><span class="eyebrow-dot"></span> DOCUMENT WORKSPACE</div><h1>Document analysis</h1><p>Upload a document or describe an idea to get a concise, source-grounded understanding.</p></div>
       @if (result()) {
         <div class="heading-actions"><button class="button button-secondary" (click)="exportJson()"><svg lucideDownload></svg> Export JSON</button><button class="button button-secondary" (click)="exportMarkdown()"><svg lucideFileText></svg> Export report</button><button class="button button-secondary" (click)="downloadCompressedMarkdown()"><svg lucideFileCheck2></svg> Compressed MD</button></div>
       }
@@ -232,10 +232,10 @@
           }
         </div>
         <div class="context-input">
-          <label for="use-case">Analysis context <span>Optional</span></label>
-          <p>Tell us what matters most for this review.</p>
-          <textarea id="use-case" [ngModel]="useCase()" (ngModelChange)="useCase.set($event)" placeholder="For example: Review this policy for data privacy risks, compliance gaps, and approval blockers." rows="7"></textarea>
-          <div class="context-footer"><span>{{ useCase().length }} characters</span><span>Context helps focus findings</span></div>
+          <label for="use-case">What should the analysis focus on? <span>Optional</span></label>
+          <p>Describe what you need to understand, or add context for the document.</p>
+          <textarea id="use-case" [ngModel]="useCase()" (ngModelChange)="useCase.set($event)" placeholder="For a short idea: describe the application or business goal. For a document: tell us which details matter most." rows="7"></textarea>
+          <div class="context-footer"><span>{{ useCase().length }} characters</span><span>Suggestions are identified separately from source facts</span></div>
         </div>
       </div>
       <div class="analysis-mode-row">
@@ -250,8 +250,46 @@
           ? 'This fallback is not LLM analysis.'
           : 'Cloud analysis requests require your one-time consent before content is sent to a configured provider.' }}</span>
       </div>
+      <div class="analysis-mode-row">
+        <label for="analysis-depth">Understanding depth</label>
+        <select id="analysis-depth" [ngModel]="analysisDepth()" (ngModelChange)="analysisDepth.set($event)">
+          <option value="Quick">Quick Understanding — purpose and essential information</option>
+          <option value="Smart">Standard Understanding — features, workflows and requirements</option>
+          <option value="Deep">Detailed Understanding — comprehensive specialist review</option>
+        </select>
+      </div>
       @if (loading()) {
-        <div class="analysis-progress" role="status"><span class="progress-track"><i></i></span><span>Analyzing document and validating source evidence…</span></div>
+        <div class="analysis-progress" role="status">
+          <div class="analysis-progress-heading">
+            <span class="analysis-progress-spinner"></span>
+            <strong>{{ analysisProgress()?.stage ?? 'Waiting for processing status' }}</strong>
+            <span class="analysis-elapsed">Elapsed {{ formatAnalysisElapsed() }}</span>
+            <button type="button" class="text-action" (click)="cancelAnalysis()">Cancel</button>
+          </div>
+          @if (analysisProgress()?.message) { <p>{{ analysisProgress()?.message }}</p> }
+          @if (analysisProgress(); as progress) {
+            <div class="analysis-progress-details">
+              @if (progress.totalChunks > 0) {
+                <span>Chunks {{ progress.completedChunks }} / {{ progress.totalChunks }}</span>
+              }
+              @if (progress.plannedInferenceCalls) {
+                <span>Inference calls {{ progress.completedInferenceCalls }} / {{ progress.plannedInferenceCalls }}</span>
+              }
+              @if (progress.provider) { <span>Provider {{ progress.provider }}</span> }
+              @if (progress.model) { <span>Model {{ progress.model }}</span> }
+            </div>
+          }
+          @if (analysisStages().length > 1) {
+            <div class="analysis-stage-list" aria-label="Completed analysis stages">
+              @for (stage of analysisStages().slice(0, -1); track stage) {
+                <span><svg lucideCircleCheck></svg>{{ stage }}</span>
+              }
+            </div>
+          }
+          @if (analysisProgressUnavailable()) {
+            <span class="progress-warning">Live status is unavailable; analysis continues.</span>
+          }
+        </div>
       }
       <div class="upload-footer">
         <span class="upload-privacy"><svg lucideShieldCheck></svg> Cloud providers are used only after your consent.</span>
@@ -263,8 +301,14 @@
 
     @if (result(); as data) {
       <section class="result-header">
-        <div><div class="eyebrow"><span class="eyebrow-dot"></span> ANALYSIS COMPLETE</div><h2>{{ data.documentTitle }}</h2><p>{{ data.documentType }} <i></i> {{ data.analysisProvider || 'Deterministic rules' }}</p></div>
-        <div class="confidence-card"><span class="confidence-ring" [style.--score]="data.confidenceScore"><strong>{{ data.confidenceScore }}%</strong></span><span><b>Confidence score</b><small>{{ data.confidenceBand }}</small></span></div>
+        <div><div class="eyebrow"><span class="eyebrow-dot"></span> ANALYSIS COMPLETE</div><h2>{{ data.documentTitle }}</h2><p>{{ data.aiReport?.sourceType || data.documentType }} <i></i> {{ data.analysisProvider || 'Deterministic rules' }}</p></div>
+        @if (data.aiReport) {
+          <div class="heading-actions">
+            <button class="button button-secondary" (click)="analysisEditMode.update(editing => !editing)">{{ analysisEditMode() ? 'Finish editing' : 'Edit analysis' }}</button>
+            @if (analysisEditMode()) { <button class="button button-secondary" (click)="restoreOriginalAnalysis()">Restore original</button> }
+            <button class="button button-primary" (click)="setTab('Presentation Studio'); selectPresentationSource('AnalysisResult')">Generate Presentation</button>
+          </div>
+        }
       </section>
 
       @if (data.modelInfo; as modelInfo) {
@@ -284,50 +328,89 @@
       }
 
       <section class="result-overview-grid">
-        <article class="panel executive-card"><div class="result-section-title"><span class="section-icon icon-blue"><svg lucideSparkles></svg></span><div><h3>{{ data.aiReport ? 'AI executive summary' : 'Executive summary' }}</h3><span>{{ data.aiReport ? 'Generated from consolidated analysis' : 'Rules-based fallback summary' }}</span></div></div><p>{{ data.aiReport?.executiveSummary || data.executiveSummary }}</p></article>
+        <article class="panel executive-card"><div class="result-section-title"><span class="section-icon icon-blue"><svg lucideSparkles></svg></span><div><h3>{{ data.aiReport ? 'Overview' : 'Executive summary' }}</h3><span>{{ data.aiReport ? 'Concise understanding of the submitted source' : 'Rules-based fallback summary' }}</span></div></div>
+          @if (analysisEditMode() && data.aiReport) {
+            <textarea class="analysis-edit-field" rows="4" [ngModel]="data.aiReport.executiveSummary" (ngModelChange)="updateAnalysisExecutiveSummary($event)" aria-label="Edit analysis overview"></textarea>
+          } @else { <p>{{ data.aiReport?.executiveSummary || data.executiveSummary }}</p> }
+        </article>
+        @if (!data.aiReport || data.aiReport.findings.some(f => f.severity !== 'INFORMATIONAL')) {
         <article class="panel risk-assessment">
           <div class="result-section-title"><span class="section-icon icon-red"><svg lucideShieldCheck></svg></span><div><h3>Risk assessment</h3><span>Severity breakdown</span></div></div>
           <div class="risk-pills"><span class="risk-pill critical"><b>{{ data.criticalRisks.length }}</b> Critical</span><span class="risk-pill high"><b>{{ data.highPriorityItems.length }}</b> High priority</span><span class="risk-pill medium"><b>{{ data.hiddenRisks.length }}</b> Observations</span>@if (data.aiReport) { <span class="risk-pill informational"><b>{{ data.aiReport.findings.filter(f => f.severity === 'INFORMATIONAL').length }}</b> Informational</span> }</div>
           <div class="risk-meter"><i [style.width.%]="findings().length ? (data.criticalRisks.length / findings().length) * 100 : 0"></i><i [style.width.%]="findings().length ? (data.highPriorityItems.length / findings().length) * 100 : 0"></i><i [style.width.%]="findings().length ? (data.hiddenRisks.length / findings().length) * 100 : 0"></i></div>
         </article>
+        }
       </section>
 
       @if (data.aiReport; as report) {
         <section class="ai-assessment-grid">
-          <article class="panel assessment-card"><div class="panel-heading"><div><h2>Document understanding</h2><p>{{ report.documentUnderstanding.domain || 'Domain not determined' }}</p></div><svg lucideFileSearch class="heading-icon"></svg></div><strong>Purpose</strong><p>{{ report.documentUnderstanding.purpose }}</p><small>{{ report.documentUnderstanding.summary }}</small></article>
-          <article class="panel assessment-card"><div class="panel-heading"><div><h2>Security insights</h2><p>AI contextual assessment</p></div><svg lucideShieldCheck class="heading-icon"></svg></div><p>{{ report.securityAssessment }}</p></article>
-          <article class="panel assessment-card"><div class="panel-heading"><div><h2>Architecture insights</h2><p>Reliability, scalability, maintainability</p></div><svg lucideChartNoAxesCombined class="heading-icon"></svg></div><p>{{ report.architectureAssessment }}</p></article>
-          <article class="panel assessment-card"><div class="panel-heading"><div><h2>Compliance insights</h2><p>Documented controls vs evidence gaps</p></div><svg lucideShieldCheck class="heading-icon"></svg></div><p>{{ report.complianceAssessment }}</p></article>
-          <article class="panel assessment-card"><div class="panel-heading"><div><h2>Business impact</h2><p>Operational and business context</p></div><svg lucideActivity class="heading-icon"></svg></div><p>{{ report.businessImpact }}</p></article>
+          <article class="panel assessment-card"><div class="panel-heading"><div><h2>What this is</h2><p>{{ report.documentUnderstanding.domain || 'Document domain' }}</p></div><svg lucideFileSearch class="heading-icon"></svg></div><strong>Main objective</strong><p>{{ report.documentUnderstanding.purpose }}</p><small>{{ report.documentUnderstanding.summary }}</small>
+            @if (report.documentUnderstanding.keyFacts.length) { <strong class="analysis-subheading">Important information</strong><ul>@for (fact of report.documentUnderstanding.keyFacts; track $index) { <li>{{ fact }}</li> }</ul> }
+            @if (report.documentUnderstanding.components.length) { <strong class="analysis-subheading">Features and modules</strong><ul>@for (component of report.documentUnderstanding.components; track $index) { <li>{{ component }}</li> }</ul> }
+          </article>
+          @if (report.securityAssessment) { <article class="panel assessment-card"><div class="panel-heading"><div><h2>Security insights</h2><p>Relevant to the supplied source</p></div><svg lucideShieldCheck class="heading-icon"></svg></div><p>{{ report.securityAssessment }}</p></article> }
+          @if (report.architectureAssessment) { <article class="panel assessment-card"><div class="panel-heading"><div><h2>Architecture insights</h2><p>Relevant technical details</p></div><svg lucideChartNoAxesCombined class="heading-icon"></svg></div><p>{{ report.architectureAssessment }}</p></article> }
+          @if (report.complianceAssessment) { <article class="panel assessment-card"><div class="panel-heading"><div><h2>Compliance insights</h2><p>Relevant source context</p></div><svg lucideShieldCheck class="heading-icon"></svg></div><p>{{ report.complianceAssessment }}</p></article> }
+          @if (report.businessImpact) { <article class="panel assessment-card"><div class="panel-heading"><div><h2>Business impact</h2><p>Relevant to this use case</p></div><svg lucideActivity class="heading-icon"></svg></div><p>{{ report.businessImpact }}</p></article> }
         </section>
+        @if (report.sections?.length) {
+          <section class="analysis-content-sections">
+            <div class="panel-heading"><div><h2>Relevant details</h2><p>Source facts, useful elaborations, suggestions and open questions are labeled separately.</p></div></div>
+            <div class="analysis-section-grid">
+              @for (section of report.sections ?? []; track section.id) {
+                <article class="panel analysis-content-section">
+                  <div class="analysis-section-heading"><div><span class="analysis-origin" [ngClass]="section.origin.toLowerCase()">{{ analysisOriginLabel(section.origin) }}</span><h3>{{ section.title }}</h3></div>
+                    @if (analysisEditMode() && (section.origin === 'Suggested' || section.origin === 'AIElaboration' || section.origin === 'Assumption' || section.origin === 'RequiresClarification')) {
+                      <div class="analysis-section-actions">
+                        <button class="text-action" (click)="confirmAnalysisSection(section.id)">Confirm</button>
+                        <button class="text-action danger-text" (click)="removeAnalysisSection(section.id)">Remove</button>
+                      </div>
+                    }
+                  </div>
+                  @if (analysisEditMode()) {
+                    <textarea class="analysis-edit-field" rows="4" [ngModel]="section.content" (ngModelChange)="updateAnalysisSection(section.id, $event)" [attr.aria-label]="'Edit ' + section.title"></textarea>
+                  } @else { <p>{{ section.content }}</p> }
+                  @for (evidence of section.evidence; track evidence.startLine + evidence.quotation) {
+                    <details class="section-source-evidence"><summary>View source · lines {{ evidence.startLine }}–{{ evidence.endLine }}</summary><blockquote>{{ evidence.quotation }}</blockquote></details>
+                  }
+                </article>
+              }
+            </div>
+          </section>
+        }
       }
 
       <section class="panel findings-panel" id="findings">
-        <div class="panel-heading"><div><h2>{{ data.aiReport ? 'AI key findings &amp; evidence explorer' : 'Key findings &amp; evidence explorer' }}</h2><p>{{ data.aiReport ? data.aiReport.findings.length : findings().length }} findings · evidence references programmatically checked</p></div><span class="confidence-inline"><svg lucideShieldCheck></svg> Evidence validated</span></div>
+        <div class="panel-heading"><div><h2>{{ data.aiReport ? 'Source-supported details' : 'Key findings &amp; evidence explorer' }}</h2><p>{{ data.aiReport ? data.aiReport.findings.length + ' observations' : findings().length + ' findings' }} · cited quotations are checked against the source</p></div><span class="confidence-inline"><svg lucideShieldCheck></svg> Evidence checked</span></div>
         @if (data.aiReport; as report) {
           <div class="finding-filters">
-            <label>Severity<select [ngModel]="findingSeverity()" (ngModelChange)="setFindingSeverity($event)"><option value="All">All severities</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option><option value="MEDIUM">Medium</option><option value="LOW">Low</option><option value="INFORMATIONAL">Informational</option></select></label>
+            @if (report.findings.some(f => isRiskCategory(f.category))) { <label>Severity<select [ngModel]="findingSeverity()" (ngModelChange)="setFindingSeverity($event)"><option value="All">All severities</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option><option value="MEDIUM">Medium</option><option value="LOW">Low</option><option value="INFORMATIONAL">Informational</option></select></label> }
             <label>Category<select [ngModel]="findingCategory()" (ngModelChange)="setFindingCategory($event)"><option value="All">All categories</option>@for (category of findingCategories(); track category) { <option [value]="category">{{ category }}</option> }</select></label>
-            <label class="confidence-filter">Minimum confidence <strong>{{ minimumConfidence() }}%</strong><input type="range" min="0" max="100" step="5" [value]="minimumConfidence()" (input)="setMinimumConfidence($any($event.target).value)"></label>
           </div>
           @if (visibleAiFindings().length) {
             @for (finding of visibleAiFindings(); track finding.title + finding.evidence[0]?.startLine) {
               <details class="finding-detail ai-finding-detail">
                 <summary>
                   <span class="severity-icon" [class]="finding.severity.toLowerCase()"><svg lucideCircleAlert></svg></span>
-                  <span class="finding-summary"><span><span class="severity-badge" [class]="finding.severity.toLowerCase()">{{ finding.severity }}</span><span class="agent-name">{{ finding.category }} · {{ finding.status }}</span><span class="finding-confidence">{{ finding.confidence * 100 | number:'1.0-0' }}% confidence</span></span><strong>{{ finding.title }}</strong><small>{{ finding.observation }}</small></span>
+                  <span class="finding-summary"><span>@if (isRiskCategory(finding.category)) { <span class="severity-badge" [class]="finding.severity.toLowerCase()">{{ finding.severity }}</span> }<span class="agent-name">{{ finding.category }} · {{ finding.status }}</span></span><strong>{{ finding.title }}</strong><small>{{ finding.observation }}</small></span>
                   <svg lucideChevronDown class="finding-chevron"></svg>
                 </summary>
                 <div class="ai-finding-body">
-                  <div class="finding-explanation-grid"><div><b>Reasoning</b><p>{{ finding.reasoning }}</p></div><div><b>Severity rationale</b><p>{{ finding.severityReason }}</p></div><div><b>Likelihood</b><p>{{ finding.likelihood || 'Not assessed' }}</p></div><div><b>Potential impact</b><p>{{ finding.impact || 'Not assessed' }}</p></div><div><b>Exploitability</b><p>{{ finding.exploitability || 'Not applicable or not evidenced' }}</p></div><div><b>Business impact</b><p>{{ finding.businessImpact }}</p></div><div><b>Technical impact</b><p>{{ finding.technicalImpact }}</p></div></div>
-                  <div class="ai-recommendation"><b>Recommendation</b><p>{{ finding.recommendation }}</p></div>
+                  @if (finding.reasoning || finding.impact || finding.businessImpact || finding.technicalImpact) { <div class="finding-explanation-grid">
+                    @if (finding.reasoning) { <div><b>Why it matters</b><p>{{ finding.reasoning }}</p></div> }
+                    @if (finding.impact) { <div><b>Potential impact</b><p>{{ finding.impact }}</p></div> }
+                    @if (finding.businessImpact) { <div><b>Business context</b><p>{{ finding.businessImpact }}</p></div> }
+                    @if (finding.technicalImpact) { <div><b>Technical context</b><p>{{ finding.technicalImpact }}</p></div> }
+                    @if (isRiskCategory(finding.category) && finding.severityReason) { <div><b>Severity rationale</b><p>{{ finding.severityReason }}</p></div> }
+                  </div> }
+                  @if (finding.recommendation) { <div class="ai-recommendation"><b>Next step</b><p>{{ finding.recommendation }}</p></div> }
                   @for (evidence of finding.evidence; track evidence.startLine + evidence.quotation) {
                     <div class="evidence-detail"><div><span class="evidence-label">SOURCE EVIDENCE · PROGRAMMATICALLY CHECKED</span><span class="line-reference"><svg lucideFileText></svg> Lines {{ evidence.startLine }}–{{ evidence.endLine }}</span></div><blockquote>{{ evidence.quotation }}</blockquote></div>
                   }
                 </div>
               </details>
             }
-          } @else { <div class="empty-state compact-empty"><strong>No findings match these filters</strong><p>Change severity, category, or confidence to see other results.</p></div> }
+          } @else { <div class="empty-state compact-empty"><strong>No findings match these filters</strong><p>Try a different category or severity.</p></div> }
         } @else if (findings().length) {
           <div class="finding-list">
             @for (finding of findings(); track finding.id) {
@@ -348,14 +431,11 @@
 
       @if (data.aiReport; as report) {
         <section class="ai-report-bottom">
-          <article class="panel insights-card"><div class="panel-heading"><div><h2>AI recommendations</h2><p>Actions grounded in the reviewed document</p></div><svg lucideSparkles class="heading-icon"></svg></div>
-            @for (item of report.findings; track item.title) { @if (item.recommendation) { <div class="insight-row"><span class="insight-dot yellow-dot"></span><span><strong>{{ item.title }}</strong><small>{{ item.recommendation }}</small></span></div> } }
-            @if (!report.findings.length) { <div class="inline-empty">No recommendations are needed based on the provided document.</div> }
-          </article>
-          <article class="panel insights-card"><div class="panel-heading"><div><h2>Priority action plan</h2><p>AI-prioritized next steps</p></div><svg lucideChartColumnIncreasing class="heading-icon"></svg></div>
-            @if (report.priorityActionPlan.length) { <ol class="action-plan-list">@for (action of report.priorityActionPlan; track $index) { <li>{{ action }}</li> }</ol> } @else { <div class="inline-empty">No priority actions were generated.</div> }
-          </article>
-          <article class="panel insights-card overall-assessment"><div class="panel-heading"><div><h2>Overall AI assessment</h2><p>Consolidated conclusion</p></div><svg lucideActivity class="heading-icon"></svg></div><p>{{ report.overallAssessment }}</p></article>
+          @if (report.priorityActionPlan.length) {
+            <article class="panel insights-card"><div class="panel-heading"><div><h2>Useful next steps</h2><p>Only actions relevant to this source</p></div><svg lucideSparkles class="heading-icon"></svg></div>
+              <ol class="action-plan-list">@for (action of report.priorityActionPlan; track $index) { <li>{{ action }}</li> }</ol>
+            </article>
+          }
         </section>
       }
 
@@ -387,7 +467,7 @@
       <div><span>Documents analyzed</span><strong>{{ history().length }}</strong></div>
       <div><span>Success rate</span><strong>{{ history().length ? (successfulHistory().length / history().length * 100 | number:'1.0-0') + '%' : '—' }}</strong></div>
       <div><span>Critical risks</span><strong>{{ criticalRiskCount() }}</strong></div>
-      <div><span>Average confidence</span><strong>{{ averageScore() === null ? '—' : averageScore() + '%' }}</strong></div>
+      <div><span>AI inference calls</span><strong>{{ inferenceCallCount() }}</strong></div>
     </section>
     <section class="chart-grid analytics-charts">
       <article class="panel chart-panel">
@@ -414,8 +494,8 @@
 
   @if (activeTab() === 'Presentation Studio') {
     <section class="page-heading">
-      <div><div class="eyebrow"><span class="eyebrow-dot"></span> PRESENTATION WORKSPACE</div><h1>AI Presentation Studio</h1><p>Transform documents, repositories and applications into professional presentations.</p></div>
-      @if (presentation()) { <div class="heading-actions"><button class="button button-secondary" (click)="downloadPresentationPptx(presentation()!)"><svg lucideDownload></svg> Download PPTX</button><button class="button button-secondary" (click)="downloadPresentationPdf(presentation()!)"><svg lucideFileText></svg> Download PDF</button></div> }
+      <div><div class="eyebrow"><span class="eyebrow-dot"></span> PRESENTATION WORKSPACE</div><h1>AI Presentation Studio</h1><p>Turn analyzed source material into adaptive, cinematic and editable presentation experiences.</p></div>
+      @if (presentation()) { <div class="heading-actions"><button class="button button-primary" (click)="startPresentation()"><svg lucidePresentation></svg> Start presentation</button><button class="button button-secondary" (click)="downloadPresentationHtml(presentation()!)"><svg lucideDownload></svg> Download Interactive HTML</button><button class="button button-secondary" (click)="downloadPresentationPptx(presentation()!)"><svg lucideDownload></svg> Download PPTX</button><button class="button button-secondary" (click)="downloadPresentationPdf(presentation()!)"><svg lucideFileText></svg> Download PDF</button></div> }
     </section>
 
     @if (presentationError()) { <div class="api-error"><svg lucideCircleAlert></svg><span>{{ presentationError() }}</span></div> }
@@ -427,6 +507,9 @@
         <button class="source-card" [class.selected]="presentationSource() === 'GitHub'" (click)="selectPresentationSource('GitHub')"><span class="source-card-icon"><svg lucideFiles></svg></span><strong>GitHub Repository</strong><small>Public or authorized private repository</small></button>
         <button class="source-card" [class.selected]="presentationSource() === 'ApplicationUrl'" (click)="selectPresentationSource('ApplicationUrl')"><span class="source-card-icon"><svg lucideMonitor></svg></span><strong>Application URL</strong><small>Authorized remote inspection</small></button>
         <button class="source-card" [class.selected]="presentationSource() === 'UseCase'" (click)="selectPresentationSource('UseCase')"><span class="source-card-icon"><svg lucideSparkles></svg></span><strong>Use-Case Description</strong><small>Describe the required presentation</small></button>
+        @if (result()) {
+          <button class="source-card" [class.selected]="presentationSource() === 'AnalysisResult'" (click)="selectPresentationSource('AnalysisResult')"><span class="source-card-icon"><svg lucideFileCheck2></svg></span><strong>Completed analysis</strong><small>Reuse structured findings without reanalyzing the document</small></button>
+        }
       </div>
 
       <div class="presentation-config-grid">
@@ -437,6 +520,8 @@
             <label>GitHub repository URL<input [ngModel]="presentationSourceReference()" (ngModelChange)="presentationSourceReference.set($event)" placeholder="https://github.com/owner/repository"></label>
           } @else if (presentationSource() === 'UseCase') {
             <label>Use-case description<textarea [ngModel]="presentationUseCase()" (ngModelChange)="presentationUseCase.set($event)" rows="6" placeholder="Describe the business problem, solution, architecture, AI integrations and roadmap."></textarea></label>
+          } @else if (presentationSource() === 'AnalysisResult') {
+            <p class="analysis-source-note">Using completed findings from {{ result()?.documentTitle }}. Only a presentation-planning request is sent; the document specialist pipeline is not rerun.</p>
           } @else {
             <label>Application URL<input [ngModel]="presentationSourceReference()" (ngModelChange)="presentationSourceReference.set($event)" placeholder="https://application.example.com"></label>
           }
@@ -445,6 +530,13 @@
           <label>Presentation title<input [ngModel]="presentationTitle()" (ngModelChange)="presentationTitle.set($event)"></label>
           <label>Target audience<input [ngModel]="presentationAudience()" (ngModelChange)="presentationAudience.set($event)"></label>
           <label>Presentation purpose<input [ngModel]="presentationPurpose()" (ngModelChange)="presentationPurpose.set($event)"></label>
+          <div class="presentation-option-grid">
+            <label>Presentation format<select [ngModel]="presentationMode()" (ngModelChange)="presentationMode.set($event)"><option value="InteractiveStorytelling">Interactive Storytelling · Recommended</option><option value="InteractiveWeb">Interactive Web Presentation</option><option value="LiveProductShowcase">Live Product Showcase</option><option value="InteractiveArchitecture">Interactive Architecture</option><option value="ExecutiveDashboard">Executive Dashboard</option><option value="MindMap">Mind Map Presentation</option><option value="TraditionalPowerPoint">Traditional PowerPoint</option></select></label>
+            <label>Duration<select [ngModel]="presentationDuration()" (ngModelChange)="presentationDuration.set($event)"><option>5 minutes</option><option>10 minutes</option><option>15 minutes</option><option>20 minutes</option><option>30 minutes</option><option>45 minutes</option></select></label>
+            <label>Presentation style<select [ngModel]="presentationStyle()" (ngModelChange)="presentationStyle.set($event)"><option>Professional</option><option>Executive</option><option>Technical</option><option>Cinematic</option><option>Product showcase</option><option>Educational</option><option>Sales proposal</option><option>Visual storytelling</option></select></label>
+            <label>Content depth<select [ngModel]="presentationContentDepth()" (ngModelChange)="presentationContentDepth.set($event)"><option>Brief</option><option>Standard</option><option>Detailed</option></select></label>
+            <label>Theme<select [ngModel]="presentationTheme()" (ngModelChange)="selectPresentationTheme($event)"><option value="Auto">Auto — AI recommendation</option><option>Neural Intelligence</option><option>Cinematic Product Launch</option><option>Executive Gold</option><option>Digital Blueprint</option><option>Immersive Storytelling</option><option>Knowledge Universe</option></select></label>
+          </div>
           <div class="presentation-option-grid"><label>Slide count<select [ngModel]="presentationSlideCount()" (ngModelChange)="presentationSlideCount.set($event)"><option [ngValue]="7">Quick · 7</option><option [ngValue]="12">Standard · 12</option><option [ngValue]="20">Detailed · 20</option><option [ngValue]="30">Maximum · 30</option></select></label><label>Aspect ratio<select [ngModel]="presentationAspectRatio()" (ngModelChange)="presentationAspectRatio.set($event)"><option value="16:9">Widescreen 16:9</option><option value="4:3">Standard 4:3</option></select></label><label>Language<select [ngModel]="presentationLanguage()" (ngModelChange)="presentationLanguage.set($event)"><option>English</option><option>French</option><option>German</option><option>Spanish</option></select></label></div>
           <div class="presentation-switches"><label><input type="checkbox" [ngModel]="includeSpeakerNotes()" (ngModelChange)="includeSpeakerNotes.set($event)"> Speaker notes</label><label><input type="checkbox" [ngModel]="includeArchitectureDiagrams()" (ngModelChange)="includeArchitectureDiagrams.set($event)"> Architecture diagrams</label><label><input type="checkbox" [ngModel]="includeScreenshots()" (ngModelChange)="includeScreenshots.set($event)"> Application screenshots</label></div>
         </div>
@@ -457,11 +549,11 @@
         <aside class="panel slide-thumbnails"><div class="panel-heading"><div><h2>Slides</h2><p>{{ deck.totalSlides }} slides</p></div></div><div class="thumbnail-list">@for (slide of deck.slides; track slide.slideNumber) { <button class="slide-thumbnail" [class.selected]="presentationPreviewIndex() === $index" (click)="presentationPreviewIndex.set($index)"><span>{{ slide.slideNumber }}</span><strong>{{ slide.title }}</strong></button> }</div></aside>
         <article class="panel slide-preview"><div class="slide-preview-toolbar"><button class="table-action" aria-label="Previous slide" (click)="previousPresentationSlide()"><svg lucideChevronLeft></svg></button><span>{{ presentationPreviewIndex() + 1 }} / {{ deck.slides.length }}</span><button class="table-action" aria-label="Next slide" (click)="nextPresentationSlide()"><svg lucideChevronRight></svg></button></div>
           @if (presentationPreviewSlide(); as slide) {
-            <div class="slide-canvas" [class.standard]="deck.aspectRatio === '4:3'">
+            <div class="slide-canvas" [ngClass]="[presentationThemeClass(deck.theme), presentationLayoutClass(slide.layoutType)]" [class.standard]="deck.aspectRatio === '4:3'">
               <div class="slide-accent"></div>
               <span class="slide-layout-label">{{ slide.layoutType }}</span>
               <div class="slide-canvas-body">
-                <h2 contenteditable="true" (input)="updatePresentationSlideTitle($any($event.target).innerText)">{{ slide.title }}</h2>
+                <h2>{{ slide.title }}</h2>
                 @if (slide.subtitle) { <p class="slide-subtitle">{{ slide.subtitle }}</p> }
                 <div class="slide-content-list">
                   @for (item of slide.content; track $index) {
@@ -486,7 +578,114 @@
         </article>
       </section>
 
+      @if (presentationPreviewSlide(); as slide) {
+        <section class="panel presentation-editor">
+          <div class="panel-heading"><div><h2>Edit presentation</h2><p>Manual changes update this preview without using AI or provider quota.</p></div>
+            <div class="presentation-edit-actions">
+              @if (presentationDirty()) { <button class="button button-primary" (click)="savePresentationEdits()">Save changes</button> }
+              <button class="button button-secondary" [disabled]="!presentationUndoStack().length" (click)="undoPresentationEdit()">Undo</button>
+              <button class="button button-secondary" [disabled]="!presentationRedoStack().length" (click)="redoPresentationEdit()">Redo</button>
+              <button class="button button-secondary" (click)="movePresentationSlide(-1)">Move section up</button>
+              <button class="button button-secondary" (click)="movePresentationSlide(1)">Move section down</button>
+              <button class="button button-secondary" (click)="addPresentationSlide()">Add section</button>
+              <button class="button button-secondary" [disabled]="deck.slides.length <= 1" (click)="removePresentationSlide()">Delete section</button>
+            </div>
+          </div>
+          @if (presentationSaveError()) { <div class="api-error">{{ presentationSaveError() }}</div> }
+          <div class="presentation-editor-grid">
+            <label>Theme
+              <select [ngModel]="deck.theme" (ngModelChange)="selectPresentationTheme($event)">
+                <option>Neural Intelligence</option><option>Cinematic Product Launch</option><option>Executive Gold</option><option>Digital Blueprint</option><option>Immersive Storytelling</option><option>Knowledge Universe</option>
+              </select>
+              <small>Recommended: {{ deck.themeRecommendation || deck.theme }} · Theme changes are local and do not regenerate content.</small>
+            </label>
+            <label>Section title<input [ngModel]="slide.title" (ngModelChange)="updatePresentationSlideTitle($event)"></label>
+            <label>Subtitle<input [ngModel]="slide.subtitle" (ngModelChange)="updatePresentationSlideSubtitle($event)"></label>
+            <label>Speaker notes<textarea rows="3" [ngModel]="slide.speakerNotes" (ngModelChange)="updatePresentationSlideNotes($event)"></textarea></label>
+            <div class="presentation-content-editor">
+              <strong>Section content</strong>
+              @for (item of slide.content; track $index) {
+                <div><textarea rows="2" [ngModel]="item" (ngModelChange)="updatePresentationSlideContent($event, $index)" [attr.aria-label]="'Edit content point ' + ($index + 1)"></textarea><button class="table-action danger-action" (click)="removePresentationSlidePoint($index)" [attr.aria-label]="'Remove content point ' + ($index + 1)"><svg lucideTrash2></svg></button></div>
+              }
+              <button class="text-action" (click)="addPresentationSlidePoint()">+ Add content point</button>
+            </div>
+            @if (slide.sourceReferences.length) { <div class="presentation-source-label"><strong>Source references</strong><span>@for (reference of slide.sourceReferences; track reference) { {{ reference }}<br> }</span></div> }
+          </div>
+        </section>
+      }
+
       <section class="panel presentation-history"><div class="panel-heading"><div><h2>Presentation history</h2><p>Saved presentations in this API session</p></div></div><div class="presentation-history-list">@for (item of presentationHistory(); track item.id) { <div class="presentation-history-row"><span class="file-type-icon"><svg lucidePresentation></svg></span><span><strong>{{ item.title }}</strong><small>{{ item.sourceType }} · {{ item.totalSlides }} slides · {{ item.aiProvider }}</small></span><div><button class="table-action" title="Preview" aria-label="Preview presentation" (click)="openPresentation(item)"><svg lucideEye></svg></button><button class="table-action" title="Download PPTX" aria-label="Download presentation PPTX" (click)="downloadPresentationPptx(item)"><svg lucideDownload></svg></button><button class="table-action danger-action" title="Delete" aria-label="Delete presentation" (click)="deletePresentation(item)"><svg lucideTrash2></svg></button></div></div> } @empty { <div class="empty-state compact-empty"><strong>No presentations yet</strong></div> }</div></section>
+    }
+
+    @if (presentationViewerOpen(); as viewerOpen) {
+      <div class="presentation-viewer" [ngClass]="presentationThemeClass(presentation()?.theme)" [class.viewer-dark]="isDarkPresentationTheme(presentation()?.theme)">
+        <div class="presentation-viewer-top">
+          <div class="viewer-title"><strong>{{ presentation()?.title }}</strong><span>{{ presentationPreviewIndex() + 1 }} / {{ presentation()?.slides?.length ?? 0 }}</span></div>
+          <div class="viewer-actions">
+            <button class="viewer-chip" (click)="setPresentationViewerMode(presentationViewerMode() === 'Linear' ? 'Scroll' : 'Linear')">{{ presentationViewerMode() }}</button>
+            <button class="viewer-chip" (click)="togglePresentationTheme()">Theme</button>
+            <button class="viewer-chip" (click)="presentationOverviewOpen.update(open => !open)">Overview <small>O</small></button>
+            <button class="viewer-chip" (click)="presentationNotesOpen.update(open => !open)">Notes <small>N</small></button>
+            <button class="viewer-icon" (click)="togglePresentationFullscreen()" aria-label="Toggle fullscreen">F</button>
+            <button class="viewer-icon" (click)="closePresentation()" aria-label="Exit presentation"><svg lucideX></svg></button>
+          </div>
+        </div>
+
+        @if (presentationViewerMode() === 'Scroll') {
+          <div class="presentation-scroll-viewer">
+            @for (slide of presentation()?.slides ?? []; track slide.slideNumber) {
+              <article class="scroll-story-section" [ngClass]="presentationThemeClass(presentation()?.theme)">
+                <span>{{ slide.slideNumber }}</span>
+                <h1>{{ slide.title }}</h1>
+                @if (slide.subtitle) { <p class="scroll-story-subtitle">{{ slide.subtitle }}</p> }
+                @for (item of slide.content; track $index) { <p class="scroll-story-point">{{ item }}</p> }
+              </article>
+            }
+          </div>
+        } @else if (presentationPreviewSlide(); as slide) {
+          <div class="presentation-viewer-stage">
+            <span class="viewer-layout">{{ slide.layoutType }}</span>
+            <div class="viewer-storyline"></div>
+            <div class="viewer-slide-content" [ngClass]="presentationLayoutClass(slide.layoutType)">
+              <p class="viewer-kicker">{{ presentation()?.sourceType }} · {{ presentation()?.targetAudience }}</p>
+              <h1>{{ slide.title }}</h1>
+              @if (slide.subtitle) { <p class="viewer-subtitle">{{ slide.subtitle }}</p> }
+              <div class="viewer-content-list">
+                @for (item of slide.content; track $index) { <p><i></i><span>{{ item }}</span></p> }
+              </div>
+              @if (slide.visualElements.length) {
+                <div class="viewer-kpi-grid">
+                  @for (visual of slide.visualElements; track visual.label) { <div><small>{{ visual.label }}</small><strong>{{ visual.value }}</strong></div> }
+                </div>
+              }
+              @if (slide.diagram) { <div class="viewer-diagram"><strong>{{ slide.diagram.type }}</strong><code>{{ slide.diagram.mermaid }}</code></div> }
+            </div>
+          </div>
+        }
+
+        <div class="presentation-viewer-bottom">
+          <button class="viewer-icon" (click)="previousPresentationSlide()" aria-label="Previous section"><svg lucideChevronLeft></svg></button>
+          <div class="presentation-progress"><span [style.width.%]="presentation()?.slides?.length ? ((presentationPreviewIndex() + 1) / presentation()!.slides.length * 100) : 0"></span></div>
+          <button class="viewer-icon" (click)="nextPresentationSlide()" aria-label="Next section"><svg lucideChevronRight></svg></button>
+          <button class="viewer-chip" (click)="togglePresentationTimer()">{{ presentationTimerRunning() ? 'Pause' : 'Resume' }}</button>
+          <button class="viewer-chip timer-readout" (click)="resetPresentationTimer()">Elapsed {{ formatPresentationTime(presentationElapsedSeconds()) }} · Remaining {{ formatPresentationTime(presentationRemainingSeconds()) }}</button>
+        </div>
+
+        @if (presentationOverviewOpen()) {
+          <aside class="presentation-overview">
+            <div class="popover-heading"><strong>Presentation overview</strong><button class="icon-button small-icon" (click)="presentationOverviewOpen.set(false)"><svg lucideX></svg></button></div>
+            <div class="viewer-overview-grid">
+              @for (slide of presentation()?.slides ?? []; track slide.slideNumber) { <button (click)="selectPresentationOverviewIndex($index)"><span>{{ slide.slideNumber }}</span><strong>{{ slide.title }}</strong></button> }
+            </div>
+          </aside>
+        }
+        @if (presentationNotesOpen()) {
+          <aside class="presentation-notes">
+            <div class="popover-heading"><strong>Presenter notes</strong><button class="icon-button small-icon" (click)="presentationNotesOpen.set(false)"><svg lucideX></svg></button></div>
+            <p>{{ presentationPreviewSlide()?.speakerNotes || 'No presenter notes were generated for this section.' }}</p>
+          </aside>
+        }
+      </div>
     }
   }
 

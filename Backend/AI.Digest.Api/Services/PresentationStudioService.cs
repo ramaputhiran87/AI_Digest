@@ -67,6 +67,20 @@ public sealed class PresentationStudioService(
             throw new AnalysisProviderException(
                 "Application URL is required.",
                 failureCode: AnalysisFailureCode.InvalidInput);
+        var supportedThemes = new[]
+        {
+            "Auto", "Auto (AI recommendation)", "Neural Intelligence",
+            "Cinematic Product Launch", "Executive Gold", "Digital Blueprint",
+            "Immersive Storytelling", "Knowledge Universe", "AI_Digest Navy Blue",
+            "Enterprise Light", "Executive Dark", "Technology Blue", "Modern Minimal"
+        };
+        if (!string.IsNullOrWhiteSpace(request.Theme) &&
+            !supportedThemes.Contains(request.Theme.Trim(), StringComparer.OrdinalIgnoreCase))
+        {
+            throw new AnalysisProviderException(
+                "The selected presentation theme is not supported.",
+                failureCode: AnalysisFailureCode.InvalidInput);
+        }
         return request;
     }
 

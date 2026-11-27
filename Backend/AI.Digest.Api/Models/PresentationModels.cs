@@ -6,10 +6,16 @@ public sealed class PresentationRequest
 {
     public string SourceType { get; init; } = "UseCase";
     public string SourceReference { get; init; } = "";
+    public string? AnalysisContext { get; init; }
     public string? UseCase { get; init; }
     public string Title { get; init; } = "AI Presentation";
     public string TargetAudience { get; init; } = "Enterprise stakeholders";
     public string Purpose { get; init; } = "Explain the project, solution and business value";
+    public string PresentationMode { get; init; } = "InteractiveStorytelling";
+    public string Duration { get; init; } = "15 minutes";
+    public string PresentationStyle { get; init; } = "Visual storytelling";
+    public string ContentDepth { get; init; } = "Standard";
+    public string Theme { get; init; } = "Auto";
     public int SlideCount { get; init; } = 10;
     public string Language { get; init; } = "English";
     public string AspectRatio { get; init; } = "16:9";
@@ -39,6 +45,7 @@ public sealed class PresentationDocument
     public string SourceReference { get; init; } = "";
     public string TargetAudience { get; init; } = "";
     public string Theme { get; init; } = "AI_Digest Navy Blue";
+    public string ThemeRecommendation { get; init; } = "";
     public string AspectRatio { get; init; } = "16:9";
     public int TotalSlides { get; init; }
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
@@ -50,6 +57,7 @@ public sealed class PresentationDocument
 
 public sealed class PresentationSlide
 {
+    public string SectionId { get; init; } = Guid.NewGuid().ToString("N");
     public int SlideNumber { get; init; }
     public string Title { get; init; } = "";
     public string Subtitle { get; init; } = "";

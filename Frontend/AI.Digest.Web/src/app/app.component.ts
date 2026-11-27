@@ -1,8 +1,8 @@
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, HostListener, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Observable } from 'rxjs';
+import { Observable, Subscription } from 'rxjs';
 import {
   LucideActivity,
   LucideArrowUpRight,
@@ -84,7 +84,22 @@ interface AiFinding {
   severityReason: string;
 }
 
+interface AnalysisProgressEvent {
+  stage: string;
+  completedChunks: number;
+  totalChunks: number;
+  completedInferenceCalls: number;
+  plannedInferenceCalls: number | null;
+  provider: string | null;
+  model: string | null;
+  message: string | null;
+  completed: boolean;
+  cancelled: boolean;
+  failed: boolean;
+}
+
 interface AiAnalysisReport {
+  sourceType?: string;
   executiveSummary: string;
   documentUnderstanding: {
     purpose: string;
@@ -94,6 +109,7 @@ interface AiAnalysisReport {
     relationships: string[];
     summary: string;
   };
+  sections?: AnalysisContentSection[];
   securityAssessment: string;
   architectureAssessment: string;
   complianceAssessment: string;
@@ -101,6 +117,15 @@ interface AiAnalysisReport {
   findings: AiFinding[];
   priorityActionPlan: string[];
   overallAssessment: string;
+}
+
+interface AnalysisContentSection {
+  id: string;
+  title: string;
+  type: string;
+  content: string;
+  origin: string;
+  evidence: AiEvidence[];
 }
 
 interface AiModelInfo {
@@ -166,6 +191,7 @@ type HistoryStatusFilter = 'All' | AnalysisStatus;
 type AnalysisMode = 'Configured' | 'Gemini' | 'Groq' | 'Deterministic';
 
 interface PresentationSlide {
+  sectionId?: string;
   slideNumber: number;
   title: string;
   subtitle: string;
@@ -187,6 +213,7 @@ interface PresentationDocument {
   sourceReference: string;
   targetAudience: string;
   theme: string;
+  themeRecommendation?: string;
   aspectRatio: string;
   totalSlides: number;
   createdAt: string;
@@ -289,12 +316,15 @@ export class AppComponent {
   readonly activeTab = signal<NavigationTab>('Dashboard');
   readonly useCase = signal('');
   readonly analysisMode = signal<AnalysisMode>('Configured');
+  readonly analysisDepth = signal<'Quick' | 'Smart' | 'Deep'>('Smart');
   readonly fileName = signal('');
   readonly selectedFile = signal<File | null>(null);
   readonly loading = signal(false);
   readonly dragOver = signal(false);
   readonly apiError = signal('');
   readonly result = signal<DigestResult | null>(null);
+  readonly originalResult = signal<DigestResult | null>(null);
+  readonly analysisEditMode = signal(false);
   readonly history = signal<AnalysisHistoryEntry[]>([]);
   readonly notificationsOpen = signal(false);
   readonly settingsOpen = signal(false);
@@ -307,7 +337,7 @@ export class AppComponent {
   readonly findingSeverity = signal('All');
   readonly findingCategory = signal('All');
   readonly minimumConfidence = signal(0);
-  readonly presentationSource = signal<'Markdown' | 'GitHub' | 'ApplicationUrl' | 'UseCase'>('Markdown');
+  readonly presentationSource = signal<'Markdown' | 'GitHub' | 'ApplicationUrl' | 'UseCase' | 'AnalysisResult'>('Markdown');
   readonly presentationFile = signal<File | null>(null);
   readonly presentationSourceReference = signal('');
   readonly presentationUseCase = signal('');
@@ -317,14 +347,38 @@ export class AppComponent {
   readonly presentationSlideCount = signal(10);
   readonly presentationLanguage = signal('English');
   readonly presentationAspectRatio = signal('16:9');
+  readonly presentationMode = signal('InteractiveStorytelling');
+  readonly presentationDuration = signal('15 minutes');
+  readonly presentationStyle = signal('Visual storytelling');
+  readonly presentationContentDepth = signal('Standard');
+  readonly presentationTheme = signal('Auto');
   readonly includeSpeakerNotes = signal(true);
   readonly includeArchitectureDiagrams = signal(true);
   readonly includeScreenshots = signal(true);
   readonly presentationLoading = signal(false);
   readonly presentationError = signal('');
   readonly presentation = signal<PresentationDocument | null>(null);
+  readonly presentationUndoStack = signal<PresentationDocument[]>([]);
+  readonly presentationRedoStack = signal<PresentationDocument[]>([]);
+  readonly presentationDirty = signal(false);
+  readonly presentationSaveError = signal('');
   readonly presentationPreviewIndex = signal(0);
   readonly presentationHistory = signal<PresentationDocument[]>([]);
+  readonly analysisElapsedSeconds = signal(0);
+  readonly analysisProgress = signal<AnalysisProgressEvent | null>(null);
+  readonly analysisStages = signal<string[]>([]);
+  readonly analysisProgressUnavailable = signal(false);
+  private analysisSubscription: Subscription | null = null;
+  private analysisProgressStream: EventSource | null = null;
+  private analysisTimer: ReturnType<typeof setInterval> | null = null;
+  readonly presentationViewerOpen = signal(false);
+  readonly presentationViewerMode = signal<'Linear' | 'Scroll'>('Linear');
+  readonly presentationOverviewOpen = signal(false);
+  readonly presentationNotesOpen = signal(false);
+  readonly presentationTimerRunning = signal(false);
+  readonly presentationElapsedSeconds = signal(0);
+  readonly presentationRemainingSeconds = signal(15 * 60);
+  private presentationTimer: ReturnType<typeof setInterval> | null = null;
   readonly aiServiceStatus = signal<AiServiceStatus | null>(null);
   readonly aiServiceStatusLoading = signal(true);
   readonly aiServiceStatusError = signal('');
@@ -381,11 +435,10 @@ export class AppComponent {
     this.successfulHistory().reduce((total, entry) =>
       total + this.findingsFor(entry.result!).filter(finding => finding.priority === 'Critical').length, 0));
 
-  readonly averageScore = computed(() => {
-    const entries = this.successfulHistory();
-    if (!entries.length) return null;
-    return Math.round(entries.reduce((total, entry) => total + entry.result!.confidenceScore, 0) / entries.length);
-  });
+  readonly inferenceCallCount = computed(() =>
+    this.successfulHistory().reduce(
+      (total, entry) => total + (entry.result?.modelInfo?.inferenceCalls ?? 0),
+      0));
 
   readonly filteredHistory = computed(() => {
     const query = this.historySearch().trim().toLowerCase();
@@ -605,12 +658,6 @@ export class AppComponent {
     items => items.reduce((total, entry) =>
       total + (entry.result ? this.findingsFor(entry.result).filter(finding => finding.priority === 'Critical').length : 0), 0)
   ));
-  readonly scoreChange = computed(() => this.comparePeriods(entries => {
-    const successful = entries.filter(entry => entry.result);
-    return successful.length
-      ? successful.reduce((total, entry) => total + entry.result!.confidenceScore, 0) / successful.length
-      : null;
-  }));
   readonly recentHistory = computed(() => this.history().slice(0, 5));
 
   readonly notificationCount = computed(() => this.failedCount());
@@ -846,11 +893,20 @@ export class AppComponent {
     if (!this.requireCloudConsent(() => this.analyse())) return;
 
     this.loading.set(true);
+    this.analysisElapsedSeconds.set(0);
+    this.analysisProgress.set(null);
+    this.analysisStages.set([]);
+    this.analysisProgressUnavailable.set(false);
+    this.startAnalysisTimer();
     this.apiError.set('');
+    const progressId = globalThis.crypto.randomUUID();
+    this.openAnalysisProgress(progressId);
     if (file) {
       const form = new FormData();
       form.append('file', file);
+      form.append('progressId', progressId);
       form.append('useCase', this.useCase());
+      form.append('analysisDepth', this.analysisDepth());
       form.append('cloudConsentScope', this.cloudConsentStatus()?.scope ?? '');
       form.append('cloudConsentPolicyVersion', this.cloudConsentStatus()?.policyVersion ?? '');
       if (this.analysisMode() !== 'Configured') {
@@ -876,6 +932,8 @@ export class AppComponent {
           text,
           title: 'Use-case.txt',
           useCase: this.useCase(),
+          progressId,
+          analysisDepth: this.analysisDepth(),
           cloudConsentScope: this.cloudConsentStatus()?.scope ?? '',
           cloudConsentPolicyVersion: this.cloudConsentStatus()?.policyVersion ?? '',
           analysisMode: this.analysisMode() === 'Configured' ? null : this.analysisMode()
@@ -891,6 +949,8 @@ export class AppComponent {
   openHistory(entry: AnalysisHistoryEntry) {
     if (!entry.result || entry.status !== 'Successful') return;
     this.result.set(entry.result);
+    this.originalResult.set(entry.result);
+    this.analysisEditMode.set(false);
     this.activeTab.set('Document Analysis');
   }
 
@@ -937,8 +997,93 @@ export class AppComponent {
     this.download(this.buildMarkdown(data), 'text/markdown', this.reportName(data.documentTitle));
   }
 
-  selectPresentationSource(source: 'Markdown' | 'GitHub' | 'ApplicationUrl' | 'UseCase') {
+  selectPresentationSource(source: 'Markdown' | 'GitHub' | 'ApplicationUrl' | 'UseCase' | 'AnalysisResult') {
     this.presentationSource.set(source);
+  }
+
+  updateAnalysisExecutiveSummary(value: string) {
+    const current = this.result();
+    if (!current?.aiReport) return;
+    this.updateAnalysisResult({
+      ...current,
+      executiveSummary: value,
+      aiReport: { ...current.aiReport, executiveSummary: value }
+    });
+  }
+
+  updateAnalysisSection(sectionId: string, value: string) {
+    const current = this.result();
+    if (!current?.aiReport?.sections) return;
+    this.updateAnalysisResult({
+      ...current,
+      aiReport: {
+        ...current.aiReport,
+        sections: current.aiReport.sections.map(section =>
+          section.id === sectionId
+            ? { ...section, content: value, origin: 'UserEdited' }
+            : section)
+      }
+    });
+  }
+
+  confirmAnalysisSection(sectionId: string) {
+    const current = this.result();
+    if (!current?.aiReport?.sections) return;
+    this.updateAnalysisResult({
+      ...current,
+      aiReport: {
+        ...current.aiReport,
+        sections: current.aiReport.sections.map(section =>
+          section.id === sectionId
+            ? { ...section, origin: 'UserConfirmed' }
+            : section)
+      }
+    });
+  }
+
+  removeAnalysisSection(sectionId: string) {
+    const current = this.result();
+    if (!current?.aiReport?.sections) return;
+    this.updateAnalysisResult({
+      ...current,
+      aiReport: {
+        ...current.aiReport,
+        sections: current.aiReport.sections.filter(section => section.id !== sectionId)
+      }
+    });
+  }
+
+  analysisOriginLabel(origin: string) {
+    return ({
+      SourceConfirmed: 'Source-confirmed',
+      UserConfirmed: 'User-confirmed',
+      AIElaboration: 'AI elaboration',
+      Suggested: 'Suggested',
+      Assumption: 'Assumption',
+      RequiresClarification: 'Requires clarification',
+      NotSpecified: 'Not specified',
+      UserEdited: 'User-edited'
+    } as Record<string, string>)[origin] ?? origin;
+  }
+
+  isRiskCategory(category: string) {
+    return ['Security', 'Compliance', 'Risk', 'Privacy', 'Reliability']
+      .includes(category);
+  }
+
+  restoreOriginalAnalysis() {
+    const original = this.originalResult();
+    if (!original) return;
+    this.updateAnalysisResult(original);
+    this.analysisEditMode.set(false);
+  }
+
+  private updateAnalysisResult(updated: DigestResult) {
+    const current = this.result();
+    if (!current) return;
+    this.result.set(updated);
+    this.persistHistory(this.history().map(entry =>
+      entry.result === current ? { ...entry, result: updated } : entry));
   }
 
   selectPresentationFile(event: Event) {
@@ -954,7 +1099,36 @@ export class AppComponent {
     try {
       const form = new FormData();
       form.append('sourceType', this.presentationSource());
-      form.append('sourceReference', this.presentationSourceReference());
+      form.append(
+        'sourceReference',
+        this.presentationSource() === 'AnalysisResult'
+          ? this.result()?.documentTitle ?? ''
+          : this.presentationSourceReference()
+      );
+      if (this.presentationSource() === 'AnalysisResult') {
+        const analysis = this.result();
+        if (!analysis) throw new Error('Analyze a document before using its results for a presentation.');
+        form.append('analysisContext', JSON.stringify({
+          documentTitle: analysis.documentTitle,
+          executiveSummary: analysis.executiveSummary,
+          report: analysis.aiReport
+            ? {
+                executiveSummary: analysis.aiReport.executiveSummary,
+                documentUnderstanding: analysis.aiReport.documentUnderstanding,
+                sections: analysis.aiReport.sections ?? [],
+                securityAssessment: analysis.aiReport.securityAssessment,
+                architectureAssessment: analysis.aiReport.architectureAssessment,
+                complianceAssessment: analysis.aiReport.complianceAssessment,
+                businessImpact: analysis.aiReport.businessImpact,
+                findings: analysis.aiReport.findings.slice(0, 10),
+                priorityActionPlan: analysis.aiReport.priorityActionPlan.slice(0, 10),
+                overallAssessment: analysis.aiReport.overallAssessment
+              }
+            : null,
+          keyFindings: analysis.keyFindings.slice(0, 10),
+          recommendations: analysis.recommendations.slice(0, 10)
+        }));
+      }
       form.append('useCase', this.presentationUseCase());
       form.append('title', this.presentationTitle());
       form.append('targetAudience', this.presentationAudience());
@@ -962,6 +1136,11 @@ export class AppComponent {
       form.append('slideCount', String(this.presentationSlideCount()));
       form.append('language', this.presentationLanguage());
       form.append('aspectRatio', this.presentationAspectRatio());
+      form.append('presentationMode', this.presentationMode());
+      form.append('duration', this.presentationDuration());
+      form.append('presentationStyle', this.presentationStyle());
+      form.append('contentDepth', this.presentationContentDepth());
+      form.append('theme', this.presentationTheme());
       form.append('includeSpeakerNotes', String(this.includeSpeakerNotes()));
       form.append('includeArchitectureDiagrams', String(this.includeArchitectureDiagrams()));
       form.append('includeScreenshots', String(this.includeScreenshots()));
@@ -975,6 +1154,11 @@ export class AppComponent {
       ).toPromise();
       if (!result) throw new Error('The presentation service returned no result.');
       this.presentation.set(result);
+      this.presentationTheme.set(result.theme);
+      this.presentationUndoStack.set([]);
+      this.presentationRedoStack.set([]);
+      this.presentationDirty.set(false);
+      this.presentationSaveError.set('');
       this.presentationPreviewIndex.set(0);
       await this.loadPresentationHistory();
     } catch (error: unknown) {
@@ -988,7 +1172,9 @@ export class AppComponent {
       }
       this.presentationError.set(httpError.error?.error
         ? `${httpError.error.error}${httpError.error.detail ? ` ${httpError.error.detail}` : ''}`
-        : `Presentation generation failed${httpError.status ? ` (${httpError.status})` : ''}.`);
+        : httpError.status === 503
+          ? 'AI presentation generation is temporarily unavailable. Please wait briefly and retry.'
+          : `Presentation generation failed${httpError.status ? ` (${httpError.status})` : ''}.`);
     } finally {
       this.presentationLoading.set(false);
     }
@@ -1019,7 +1205,163 @@ export class AppComponent {
     if (!result) return;
     const slides = result.slides.map((slide, index) =>
       index === this.presentationPreviewIndex() ? { ...slide, title: value } : slide);
-    this.presentation.set({ ...result, slides });
+    this.commitPresentationEdit({ ...result, slides });
+  }
+
+  updatePresentationSlideSubtitle(value: string) {
+    const result = this.presentation();
+    if (!result) return;
+    const slides = result.slides.map((slide, index) =>
+      index === this.presentationPreviewIndex() ? { ...slide, subtitle: value } : slide);
+    this.commitPresentationEdit({ ...result, slides });
+  }
+
+  updatePresentationSlideNotes(value: string) {
+    const result = this.presentation();
+    if (!result) return;
+    const slides = result.slides.map((slide, index) =>
+      index === this.presentationPreviewIndex() ? { ...slide, speakerNotes: value } : slide);
+    this.commitPresentationEdit({ ...result, slides });
+  }
+
+  updatePresentationSlideContent(value: string, contentIndex: number) {
+    const result = this.presentation();
+    if (!result) return;
+    const slides = result.slides.map((slide, index) => {
+      if (index !== this.presentationPreviewIndex()) return slide;
+      const content = [...slide.content];
+      content[contentIndex] = value;
+      return { ...slide, content };
+    });
+    this.commitPresentationEdit({ ...result, slides });
+  }
+
+  addPresentationSlidePoint() {
+    const result = this.presentation();
+    if (!result) return;
+    const slides = result.slides.map((slide, index) => index === this.presentationPreviewIndex()
+      ? { ...slide, content: [...slide.content, 'New point'] }
+      : slide);
+    this.commitPresentationEdit({ ...result, slides });
+  }
+
+  removePresentationSlidePoint(contentIndex: number) {
+    const result = this.presentation();
+    if (!result) return;
+    const slides = result.slides.map((slide, index) => index === this.presentationPreviewIndex()
+      ? { ...slide, content: slide.content.filter((_, itemIndex) => itemIndex !== contentIndex) }
+      : slide);
+    this.commitPresentationEdit({ ...result, slides });
+  }
+
+  addPresentationSlide() {
+    const result = this.presentation();
+    if (!result) return;
+    const slides = this.reindexSlides([
+      ...result.slides,
+      {
+        sectionId: globalThis.crypto.randomUUID(),
+        slideNumber: result.slides.length + 1,
+        title: 'New section',
+        subtitle: '',
+        layoutType: 'FeatureShowcase',
+        content: [],
+        visualElements: [],
+        screenshotReferences: [],
+        speakerNotes: '',
+        sourceReferences: []
+      }
+    ]);
+    this.commitPresentationEdit({ ...result, slides, totalSlides: slides.length });
+    this.presentationPreviewIndex.set(slides.length - 1);
+  }
+
+  removePresentationSlide() {
+    const result = this.presentation();
+    if (!result || result.slides.length <= 1) return;
+    const slides = this.reindexSlides(result.slides.filter(
+      (_, index) => index !== this.presentationPreviewIndex()));
+    this.commitPresentationEdit({ ...result, slides, totalSlides: slides.length });
+    this.presentationPreviewIndex.set(Math.min(this.presentationPreviewIndex(), slides.length - 1));
+  }
+
+  movePresentationSlide(direction: -1 | 1) {
+    const result = this.presentation();
+    if (!result) return;
+    const from = this.presentationPreviewIndex();
+    const to = from + direction;
+    if (to < 0 || to >= result.slides.length) return;
+    const slides = [...result.slides];
+    [slides[from], slides[to]] = [slides[to], slides[from]];
+    this.commitPresentationEdit({ ...result, slides: this.reindexSlides(slides) });
+    this.presentationPreviewIndex.set(to);
+  }
+
+  undoPresentationEdit() {
+    const previous = this.presentationUndoStack().at(-1);
+    const current = this.presentation();
+    if (!previous || !current) return;
+    this.presentationUndoStack.update(stack => stack.slice(0, -1));
+    this.presentationRedoStack.update(stack => [...stack, current].slice(-30));
+    this.presentation.set(previous);
+    this.presentationPreviewIndex.set(Math.min(this.presentationPreviewIndex(), previous.slides.length - 1));
+  }
+
+  redoPresentationEdit() {
+    const next = this.presentationRedoStack().at(-1);
+    const current = this.presentation();
+    if (!next || !current) return;
+    this.presentationRedoStack.update(stack => stack.slice(0, -1));
+    this.presentationUndoStack.update(stack => [...stack, current].slice(-30));
+    this.presentation.set(next);
+    this.presentationPreviewIndex.set(Math.min(this.presentationPreviewIndex(), next.slides.length - 1));
+  }
+
+  selectPresentationTheme(theme: string) {
+    this.presentationTheme.set(theme);
+    const result = this.presentation();
+    if (result) this.commitPresentationEdit({ ...result, theme });
+  }
+
+  presentationThemeClass(theme: string | undefined) {
+    const key = (theme ?? '').toLowerCase();
+    if (key.includes('neural')) return 'theme-neural';
+    if (key.includes('cinematic')) return 'theme-cinematic';
+    if (key.includes('gold')) return 'theme-gold';
+    if (key.includes('blueprint')) return 'theme-blueprint';
+    if (key.includes('universe')) return 'theme-universe';
+    if (key.includes('storytelling')) return 'theme-story';
+    if (key.includes('dark')) return 'theme-neural';
+    if (key.includes('technology')) return 'theme-blueprint';
+    return 'theme-default';
+  }
+
+  presentationLayoutClass(layout: string | undefined) {
+    const key = (layout ?? '').toLowerCase();
+    if (['title', 'hero', 'executivesummary'].includes(key)) return 'layout-hero';
+    if (['workflow', 'userjourney'].includes(key)) return 'layout-workflow';
+    if (['architecturediagram', 'blueprint'].includes(key)) return 'layout-blueprint';
+    if (['conclusion', 'qanda'].includes(key)) return 'layout-conclusion';
+    return 'layout-story';
+  }
+
+  isDarkPresentationTheme(theme: string | undefined) {
+    return ['Neural Intelligence', 'Executive Gold', 'Digital Blueprint', 'Knowledge Universe',
+      'Executive Dark', 'Technology Blue'].includes(theme ?? '');
+  }
+
+  private commitPresentationEdit(updated: PresentationDocument) {
+    const current = this.presentation();
+    if (!current) return;
+    this.presentationUndoStack.update(stack => [...stack, current].slice(-30));
+    this.presentationRedoStack.set([]);
+    this.presentation.set(updated);
+    this.presentationDirty.set(true);
+    this.presentationSaveError.set('');
+  }
+
+  private reindexSlides(slides: PresentationSlide[]) {
+    return slides.map((slide, index) => ({ ...slide, slideNumber: index + 1 }));
   }
 
   downloadPresentationPptx(presentation: PresentationDocument) {
@@ -1030,9 +1372,149 @@ export class AppComponent {
     window.open(`${this.apiBaseUrl}/api/presentations/${presentation.id}/pdf`, '_blank');
   }
 
+  downloadPresentationHtml(presentation: PresentationDocument) {
+    window.open(`${this.apiBaseUrl}/api/presentations/${presentation.id}/html`, '_blank');
+  }
+
   openPresentation(presentation: PresentationDocument) {
     this.presentation.set(presentation);
+    this.presentationTheme.set(presentation.theme);
+    this.presentationUndoStack.set([]);
+    this.presentationRedoStack.set([]);
+    this.presentationDirty.set(false);
+    this.presentationSaveError.set('');
     this.presentationPreviewIndex.set(0);
+  }
+
+  startPresentation(presentation?: PresentationDocument) {
+    if (presentation) this.openPresentation(presentation);
+    if (!this.presentation()) return;
+    this.presentationViewerOpen.set(true);
+    this.presentationOverviewOpen.set(false);
+    this.presentationNotesOpen.set(false);
+    this.presentationElapsedSeconds.set(0);
+    this.presentationRemainingSeconds.set(this.durationSeconds());
+  }
+
+  closePresentation() {
+    this.presentationViewerOpen.set(false);
+    this.presentationOverviewOpen.set(false);
+    this.presentationNotesOpen.set(false);
+    this.stopPresentationTimer();
+  }
+
+  togglePresentationFullscreen() {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      void document.documentElement.requestFullscreen();
+    }
+  }
+
+  togglePresentationTimer() {
+    if (this.presentationTimerRunning()) {
+      this.stopPresentationTimer();
+      return;
+    }
+    this.presentationTimerRunning.set(true);
+    this.presentationTimer = setInterval(() => {
+      if (!this.presentationTimerRunning()) return;
+      this.presentationElapsedSeconds.update(value => value + 1);
+      this.presentationRemainingSeconds.update(value => Math.max(0, value - 1));
+    }, 1000);
+  }
+
+  stopPresentationTimer() {
+    if (this.presentationTimer) clearInterval(this.presentationTimer);
+    this.presentationTimer = null;
+    this.presentationTimerRunning.set(false);
+  }
+
+  resetPresentationTimer() {
+    this.stopPresentationTimer();
+    this.presentationElapsedSeconds.set(0);
+    this.presentationRemainingSeconds.set(this.durationSeconds());
+  }
+
+  durationSeconds() {
+    const match = this.presentationDuration().match(/(\d+)/);
+    return (match ? Number(match[1]) : 15) * 60;
+  }
+
+  formatPresentationTime(seconds: number) {
+    const minutes = Math.floor(seconds / 60);
+    const remaining = seconds % 60;
+    return `${minutes}:${remaining.toString().padStart(2, '0')}`;
+  }
+
+  selectPresentationOverviewIndex(index: number) {
+    this.presentationPreviewIndex.set(index);
+    this.presentationOverviewOpen.set(false);
+  }
+
+  setPresentationViewerMode(mode: 'Linear' | 'Scroll') {
+    this.presentationViewerMode.set(mode);
+  }
+
+  togglePresentationTheme() {
+    const themes = [
+      'Neural Intelligence',
+      'Cinematic Product Launch',
+      'Executive Gold',
+      'Digital Blueprint',
+      'Immersive Storytelling',
+      'Knowledge Universe'
+    ];
+    const current = this.presentation()?.theme ?? this.presentationTheme();
+    const nextIndex = (themes.indexOf(current) + 1) % themes.length;
+    const next = themes[nextIndex];
+    this.selectPresentationTheme(next);
+  }
+
+  async savePresentationEdits() {
+    const current = this.presentation();
+    if (!current || !this.presentationDirty()) return;
+    this.presentationSaveError.set('');
+    try {
+      const saved = await this.http.put<PresentationDocument>(
+        `${this.apiBaseUrl}/api/presentations/${current.id}`,
+        current,
+        { withCredentials: true }
+      ).toPromise();
+      if (!saved) throw new Error('The presentation service returned no saved version.');
+      this.presentation.set(saved);
+      this.presentationDirty.set(false);
+      await this.loadPresentationHistory();
+    } catch (error: unknown) {
+      const status = (error as { status?: number }).status;
+      this.presentationSaveError.set(
+        `Could not save presentation edits${status ? ` (HTTP ${status})` : ''}. Your local edits remain available.`);
+    }
+  }
+
+  @HostListener('document:keydown', ['$event'])
+  handlePresentationKeyboard(event: KeyboardEvent) {
+    if (!this.presentationViewerOpen()) return;
+    if (event.key === 'ArrowRight' || event.key === ' ') {
+      event.preventDefault();
+      this.nextPresentationSlide();
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      this.previousPresentationSlide();
+    } else if (event.key.toLowerCase() === 'f') {
+      this.togglePresentationFullscreen();
+    } else if (event.key === 'Escape') {
+      this.closePresentation();
+    } else if (event.key === 'Home') {
+      this.presentationPreviewIndex.set(0);
+    } else if (event.key === 'End') {
+      const deck = this.presentation();
+      if (deck) this.presentationPreviewIndex.set(deck.slides.length - 1);
+    } else if (event.key.toLowerCase() === 'o') {
+      this.presentationOverviewOpen.update(open => !open);
+    } else if (event.key.toLowerCase() === 'n') {
+      this.presentationNotesOpen.update(open => !open);
+    }
   }
 
   async deletePresentation(presentation: PresentationDocument) {
@@ -1129,17 +1611,47 @@ export class AppComponent {
     this.fileName.set(file.name);
   }
 
+  startAnalysisTimer() {
+    this.stopAnalysisTimer();
+    this.analysisTimer = setInterval(() => {
+      this.analysisElapsedSeconds.update(seconds => seconds + 1);
+    }, 1000);
+  }
+
+  stopAnalysisTimer() {
+    if (this.analysisTimer) clearInterval(this.analysisTimer);
+    this.analysisTimer = null;
+  }
+
+  cancelAnalysis() {
+    this.analysisSubscription?.unsubscribe();
+    this.analysisSubscription = null;
+    this.closeAnalysisProgress();
+    this.stopAnalysisTimer();
+    this.loading.set(false);
+    this.apiError.set('Analysis cancelled. Provider requests already accepted may still consume quota.');
+  }
+
+  formatAnalysisElapsed() {
+    const seconds = this.analysisElapsedSeconds();
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}:${(seconds % 60).toString().padStart(2, '0')}`;
+  }
+
   private sendAnalysis(
     request: Observable<DigestResult>,
     title: string,
     type: string,
     size: number
   ) {
-    request.subscribe({
+    this.analysisSubscription?.unsubscribe();
+    this.analysisSubscription = request.subscribe({
       next: value => this.setResult(value, title, type, size),
       error: error => {
+        this.closeAnalysisProgress();
         const payload = error?.error as { code?: unknown; error?: unknown } | undefined;
         if (payload?.code === 'AI_CLOUD_CONSENT_REQUIRED') {
+          this.stopAnalysisTimer();
           this.loading.set(false);
           this.pendingCloudConsentAction = () => this.analyse();
           this.cloudConsentChecked.set(false);
@@ -1160,18 +1672,59 @@ export class AppComponent {
                   : error.status === 504
                     ? 'Analysis request timed out. Please try again.'
                     : error.status === 503
-                      ? 'AI analysis is temporarily unavailable. Please try again.'
+                        ? apiMessage
+                          ? `AI analysis unavailable: ${apiMessage}`
+                          : 'AI analysis is temporarily unavailable. Please try again.'
                       : `Analysis failed (${error.status || 'unknown error'}).`);
         this.apiError.set(message);
         this.recordFailure(title, type, size, message);
+        this.stopAnalysisTimer();
         this.loading.set(false);
       },
-      complete: () => this.loading.set(false)
+      complete: () => {
+        this.closeAnalysisProgress();
+        this.stopAnalysisTimer();
+        this.loading.set(false);
+      }
     });
   }
 
+  private openAnalysisProgress(progressId: string) {
+    this.closeAnalysisProgress();
+    const stream = new EventSource(
+      `${this.apiBaseUrl}/api/documents/analysis-progress/${progressId}`,
+      { withCredentials: true }
+    );
+    this.analysisProgressStream = stream;
+    stream.onmessage = event => {
+      try {
+        const progress = JSON.parse(event.data) as AnalysisProgressEvent;
+        this.analysisProgress.set(progress);
+        if (!this.analysisStages().includes(progress.stage))
+          this.analysisStages.update(stages => [...stages, progress.stage]);
+        if (progress.completed || progress.cancelled || progress.failed)
+          this.closeAnalysisProgress();
+      } catch {
+        this.analysisProgressUnavailable.set(true);
+        this.closeAnalysisProgress();
+      }
+    };
+    stream.onerror = () => {
+      this.analysisProgressUnavailable.set(true);
+      this.closeAnalysisProgress();
+    };
+  }
+
+  private closeAnalysisProgress() {
+    this.analysisProgressStream?.close();
+    this.analysisProgressStream = null;
+  }
+
   private setResult(value: DigestResult, title: string, type: string, size: number) {
+    this.stopAnalysisTimer();
     this.result.set(value);
+    this.originalResult.set(value);
+    this.analysisEditMode.set(false);
     this.activeTab.set('Document Analysis');
     this.persistHistory([{
       id: crypto.randomUUID(),
@@ -1388,20 +1941,16 @@ export class AppComponent {
     const report = data.aiReport;
     if (report) {
       const model = data.modelInfo;
-      const severityCounts = report.findings.reduce<Record<string, number>>((counts, finding) => {
-        counts[finding.severity] = (counts[finding.severity] ?? 0) + 1;
-        return counts;
-      }, {});
       return [
-        `# AI Executive Review: ${data.documentTitle}`,
+        `# Document Understanding: ${data.documentTitle}`,
         '',
-        `**Document type:** ${data.documentType}`,
+        `**Source type:** ${report.sourceType || data.documentType}`,
         `**Provider / model:** ${model?.provider ?? data.analysisProvider ?? 'Unknown'} / ${model?.modelName ?? 'Unknown'}`,
         `**Model version:** ${model?.modelVersion ?? 'Not reported'}`,
         `**Analysis status:** ${model?.status ?? 'Completed'}`,
         `**Inference calls:** ${model?.inferenceCalls ?? 'Not available'}`,
         '',
-        '## Executive Summary',
+        '## Overview',
         report.executiveSummary,
         '',
         '## Document Understanding',
@@ -1416,51 +1965,39 @@ export class AppComponent {
         ...report.documentUnderstanding.components.map(item => `- Component: ${item}`),
         ...report.documentUnderstanding.relationships.map(item => `- Relationship: ${item}`),
         '',
-        '## Key Findings',
+        ...(report.sections ?? []).flatMap(section => [
+          `## ${section.title}`,
+          `**Type / origin:** ${section.type} / ${section.origin}`,
+          section.content,
+          ...section.evidence.map(evidence =>
+            `> ${evidence.quotation}\n>\n> Source lines ${evidence.startLine}-${evidence.endLine}`),
+          ''
+        ]),
+        ...(report.findings.length ? ['## Source-grounded observations'] : []),
         ...(report.findings.length
           ? report.findings.flatMap(finding => [
-              `### ${finding.severity}: ${finding.title}`,
+              `### ${finding.title}`,
               `**Category/status:** ${finding.category} / ${finding.status}`,
               `**Observation:** ${finding.observation}`,
-              `**Reasoning:** ${finding.reasoning}`,
-              `**Likelihood:** ${finding.likelihood}`,
-              `**Potential impact:** ${finding.impact}`,
-              `**Exploitability:** ${finding.exploitability}`,
-              `**Severity rationale:** ${finding.severityReason}`,
-              `**Confidence:** ${(finding.confidence * 100).toFixed(0)}%`,
-              `**Business impact:** ${finding.businessImpact}`,
-              `**Technical impact:** ${finding.technicalImpact}`,
-              `**Recommendation:** ${finding.recommendation}`,
+              ...(finding.recommendation ? [`**Next step:** ${finding.recommendation}`] : []),
               ...finding.evidence.map(evidence =>
                 `> ${evidence.quotation}\n>\n> Source lines ${evidence.startLine}-${evidence.endLine}`),
               ''
             ])
           : ['No evidence-backed findings were identified.', '']),
-        '## Security Assessment',
-        report.securityAssessment,
+        ...[
+          ['Security insights', report.securityAssessment],
+          ['Architecture insights', report.architectureAssessment],
+          ['Compliance insights', report.complianceAssessment],
+          ['Business impact', report.businessImpact]
+        ].flatMap(([title, content]) => content ? [`## ${title}`, content, ''] : []),
         '',
-        '## Architecture Assessment',
-        report.architectureAssessment,
-        '',
-        '## Compliance Assessment',
-        report.complianceAssessment,
-        '',
-        '## Business Impact',
-        report.businessImpact,
-        '',
-        '## Risk Distribution',
-        ...['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFORMATIONAL']
-          .map(severity => `- ${severity}: ${severityCounts[severity] ?? 0}`),
-        '',
-        '## Priority Action Plan',
+        ...(report.priorityActionPlan.length ? ['## Next steps'] : []),
         ...(report.priorityActionPlan.length
           ? report.priorityActionPlan.map((action, index) => `${index + 1}. ${action}`)
-          : ['No priority actions were generated.']),
+          : []),
         '',
-        '## Overall AI Assessment',
-        report.overallAssessment,
-        '',
-        '## Evidence and Review Status',
+        '## Source review',
         model?.findingOrigin ?? 'AI-generated assessment; source quotations are checked programmatically.',
         'Source verification checks quotation traceability only. Findings have not been human-verified and do not establish that a real-world system is exploitable.'
       ].join('\n');

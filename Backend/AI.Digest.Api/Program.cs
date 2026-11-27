@@ -132,6 +132,8 @@ builder.Services.AddSingleton<CloudAiConsentStore>();
 builder.Services.AddSingleton<CloudAiConsentService>();
 builder.Services.AddSingleton<AiProviderConfiguration>();
 builder.Services.AddSingleton<AiProviderHealthTracker>();
+builder.Services.AddSingleton<AiInferenceConcurrencyGate>();
+builder.Services.AddSingleton<AnalysisProgressHub>();
 builder.Services.AddHostedService<AiProviderStartupHealthCheck>();
 builder.Services.AddSingleton<AiDailyUsageLimiter>();
 builder.Services.AddMemoryCache(options => options.SizeLimit = 1000);
@@ -370,13 +372,59 @@ else
     });
 }
 
+analysisEndpoints.MapGet("/analysis-progress/{id:guid}", async (
+    Guid id,
+    HttpContext context,
+    AnalysisProgressHub progressHub,
+    CancellationToken cancellationToken) =>
+{
+    var subscription = progressHub.Subscribe(id);
+    context.Response.StatusCode = StatusCodes.Status200OK;
+    context.Response.ContentType = "text/event-stream";
+    context.Response.Headers.CacheControl = "no-cache, no-transform";
+    context.Response.Headers.Connection = "keep-alive";
+    context.Response.Headers["X-Accel-Buffering"] = "no";
+
+    async Task WriteEventAsync(AnalysisProgressEvent progress)
+    {
+        await context.Response.WriteAsync(
+            $"data: {JsonSerializer.Serialize(progress)}\n\n",
+            cancellationToken);
+        await context.Response.Body.FlushAsync(cancellationToken);
+    }
+
+    foreach (var progress in subscription.History)
+        await WriteEventAsync(progress);
+    while (!cancellationToken.IsCancellationRequested)
+    {
+        using var heartbeatCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var updatesReady = subscription.Updates.WaitToReadAsync(cancellationToken).AsTask();
+        var heartbeat = Task.Delay(TimeSpan.FromSeconds(15), heartbeatCancellation.Token);
+        if (await Task.WhenAny(updatesReady, heartbeat) == heartbeat)
+        {
+            await context.Response.WriteAsync(": keep-alive\n\n", cancellationToken);
+            await context.Response.Body.FlushAsync(cancellationToken);
+            continue;
+        }
+
+        heartbeatCancellation.Cancel();
+        if (!await updatesReady)
+            break;
+        while (subscription.Updates.TryRead(out var progress))
+            await WriteEventAsync(progress);
+    }
+    return Results.Empty;
+}).DisableAntiforgery();
+
 analysisEndpoints.MapPost("/analyse", async (HttpRequest request,
-    DocumentAnalysisService analysis,
+    IServiceScopeFactory scopeFactory,
     AiProviderConfiguration aiConfiguration,
     IEnumerable<IAiModelClient> aiClients,
     CloudAiConsentService consent,
     AiDailyUsageLimiter dailyUsage,
     AnalysisResultCache resultCache,
+    AnalysisProgressHub progressHub,
     CancellationToken cancellationToken) =>
 {
     if (!request.HasFormContentType)
@@ -388,6 +436,10 @@ analysisEndpoints.MapPost("/analyse", async (HttpRequest request,
     var analysisMode = form["analysisMode"].ToString();
     var consentScope = form["cloudConsentScope"].ToString();
     var consentPolicyVersion = form["cloudConsentPolicyVersion"].ToString();
+    var analysisDepth = form["analysisDepth"].ToString();
+    var progressId = Guid.TryParse(form["progressId"], out var parsedProgressId)
+        ? parsedProgressId
+        : (Guid?)null;
     var consentValid = consent.HasValidConsent(
         request.HttpContext,
         consentScope,
@@ -397,6 +449,7 @@ analysisEndpoints.MapPost("/analyse", async (HttpRequest request,
             "Cloud analysis requires your explicit consent.",
             failureCode: AnalysisFailureCode.CloudConsentRequired));
     var allowCloudProcessing = !aiConfiguration.CloudConsentRequired || consentValid;
+    var userScope = GetAnalysisUserKey(request.HttpContext);
 
     if (file is null)
         return Results.BadRequest(new { error = "A document or use-case text is required." });
@@ -411,6 +464,8 @@ analysisEndpoints.MapPost("/analyse", async (HttpRequest request,
 
     try
     {
+        if (progressId is { } id)
+            progressHub.Start(id);
         await using var stream = file.OpenReadStream();
         using var reader = new StreamReader(stream);
         var content = await reader.ReadToEndAsync(cancellationToken);
@@ -418,18 +473,23 @@ analysisEndpoints.MapPost("/analyse", async (HttpRequest request,
             return Results.BadRequest(new { error = "The selected document is empty." });
         if (content.Length > aiConfiguration.MaxInputCharacters)
             return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+        if (progressId is { } extractionId)
+            progressHub.Report(extractionId, new AnalysisProgressEvent(
+                "Content extraction",
+                Message: $"{content.Length:N0} characters extracted."));
 
         var result = await resultCache.GetOrCreateAsync(
-            GetAnalysisUserKey(request.HttpContext),
+            userScope,
             Path.GetFileName(file.FileName),
             content,
             useCase,
             analysisMode,
             allowCloudProcessing,
-            async () =>
+            async (sharedCancellationToken, sharedProgress) =>
             {
+                sharedCancellationToken.ThrowIfCancellationRequested();
                 if (!dailyUsage.TryConsume(
-                    GetAnalysisUserKey(request.HttpContext),
+                    userScope,
                     aiConfiguration.DailyUsageLimit,
                     DateOnly.FromDateTime(DateTime.UtcNow)))
                 {
@@ -438,18 +498,47 @@ analysisEndpoints.MapPost("/analyse", async (HttpRequest request,
                         failureCode: AnalysisFailureCode.DailyLimitReached);
                 }
 
+                using var scope = scopeFactory.CreateScope();
+                var analysis = scope.ServiceProvider.GetRequiredService<DocumentAnalysisService>();
                 return await analysis.AnalyseAsync(
                     Path.GetFileName(file.FileName),
                     content,
                     useCase,
-                    cancellationToken,
+                    sharedCancellationToken,
                     analysisMode,
-                    allowCloudProcessing);
-            });
+                    allowCloudProcessing,
+                    analysisDepth,
+                    sharedProgress);
+            },
+            analysisDepth,
+            cancellationToken,
+            progressId is { } analysisProgressId
+                ? new InlineProgress<AnalysisProgressEvent>(
+                    progress => progressHub.Report(analysisProgressId, progress))
+                : null);
+        if (progressId is { } completedId)
+            progressHub.Report(completedId, new AnalysisProgressEvent(
+                "Analysis completed",
+                Completed: true,
+                Message: "Analysis finished successfully."));
         return Results.Ok(result);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        if (progressId is { } id)
+            progressHub.Report(id, new AnalysisProgressEvent(
+                "Analysis cancelled",
+                Cancelled: true,
+                Message: "The request was cancelled; provider work already accepted may still consume quota."));
+        throw;
     }
     catch (AnalysisProviderException exception)
     {
+        if (progressId is { } id)
+            progressHub.Report(id, new AnalysisProgressEvent(
+                "Analysis failed",
+                Failed: true,
+                Message: exception.Message));
         return MapAnalysisFailure(exception);
     }
 }).RequireRateLimiting("analysis")
@@ -457,12 +546,13 @@ analysisEndpoints.MapPost("/analyse", async (HttpRequest request,
   .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(22 * 1024 * 1024));
 
 analysisEndpoints.MapPost("/analyse-text", async (AnalyseTextRequest request,
-    DocumentAnalysisService analysis,
+    IServiceScopeFactory scopeFactory,
     AiProviderConfiguration aiConfiguration,
     IEnumerable<IAiModelClient> aiClients,
     CloudAiConsentService consent,
     AiDailyUsageLimiter dailyUsage,
     AnalysisResultCache resultCache,
+    AnalysisProgressHub progressHub,
     HttpContext httpContext,
     CancellationToken cancellationToken) =>
 {
@@ -482,22 +572,30 @@ analysisEndpoints.MapPost("/analyse-text", async (AnalyseTextRequest request,
             "Cloud analysis requires your explicit consent.",
             failureCode: AnalysisFailureCode.CloudConsentRequired));
     var allowCloudProcessing = !aiConfiguration.CloudConsentRequired || consentValid;
+    var userScope = GetAnalysisUserKey(httpContext);
     var title = string.IsNullOrWhiteSpace(request.Title)
         ? "Use-case.txt"
         : Path.GetFileName(request.Title);
     try
     {
+        if (request.ProgressId is { } progressId)
+            progressHub.Start(progressId);
+        if (request.ProgressId is { } extractionId)
+            progressHub.Report(extractionId, new AnalysisProgressEvent(
+                "Content extraction",
+                Message: $"{request.Text.Length:N0} characters received."));
         var result = await resultCache.GetOrCreateAsync(
-            GetAnalysisUserKey(httpContext),
+            userScope,
             title,
             request.Text,
             request.UseCase,
             request.AnalysisMode,
             allowCloudProcessing,
-            async () =>
+            async (sharedCancellationToken, sharedProgress) =>
             {
+                sharedCancellationToken.ThrowIfCancellationRequested();
                 if (!dailyUsage.TryConsume(
-                    GetAnalysisUserKey(httpContext),
+                    userScope,
                     aiConfiguration.DailyUsageLimit,
                     DateOnly.FromDateTime(DateTime.UtcNow)))
                 {
@@ -506,18 +604,47 @@ analysisEndpoints.MapPost("/analyse-text", async (AnalyseTextRequest request,
                         failureCode: AnalysisFailureCode.DailyLimitReached);
                 }
 
+                using var scope = scopeFactory.CreateScope();
+                var analysis = scope.ServiceProvider.GetRequiredService<DocumentAnalysisService>();
                 return await analysis.AnalyseAsync(
                     title,
                     request.Text,
                     request.UseCase,
-                    cancellationToken,
+                    sharedCancellationToken,
                     request.AnalysisMode,
-                    allowCloudProcessing);
-            });
+                    allowCloudProcessing,
+                    request.AnalysisDepth,
+                    sharedProgress);
+            },
+            request.AnalysisDepth,
+            cancellationToken,
+            request.ProgressId is { } analysisProgressId
+                ? new InlineProgress<AnalysisProgressEvent>(
+                    progress => progressHub.Report(analysisProgressId, progress))
+                : null);
+        if (request.ProgressId is { } completedId)
+            progressHub.Report(completedId, new AnalysisProgressEvent(
+                "Analysis completed",
+                Completed: true,
+                Message: "Analysis finished successfully."));
         return Results.Ok(result);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        if (request.ProgressId is { } id)
+            progressHub.Report(id, new AnalysisProgressEvent(
+                "Analysis cancelled",
+                Cancelled: true,
+                Message: "The request was cancelled; provider work already accepted may still consume quota."));
+        throw;
     }
     catch (AnalysisProviderException exception)
     {
+        if (request.ProgressId is { } id)
+            progressHub.Report(id, new AnalysisProgressEvent(
+                "Analysis failed",
+                Failed: true,
+                Message: exception.Message));
         return MapAnalysisFailure(exception);
     }
 }).RequireRateLimiting("analysis")
@@ -552,10 +679,16 @@ var presentationPreviewEndpoint = app.MapPost("/api/presentations/preview", asyn
             {
                 SourceType = form["sourceType"].ToString(),
                 SourceReference = form["sourceReference"].ToString(),
+                AnalysisContext = form["analysisContext"].ToString(),
                 UseCase = form["useCase"].ToString(),
                 Title = form["title"].ToString(),
                 TargetAudience = form["targetAudience"].ToString(),
                 Purpose = form["purpose"].ToString(),
+                PresentationMode = form["presentationMode"].ToString(),
+                Duration = form["duration"].ToString(),
+                PresentationStyle = form["presentationStyle"].ToString(),
+                ContentDepth = form["contentDepth"].ToString(),
+                Theme = form["theme"].ToString(),
                 SlideCount = int.TryParse(form["slideCount"], out var count) ? count : 10,
                 Language = form["language"].ToString(),
                 AspectRatio = form["aspectRatio"].ToString(),
@@ -645,6 +778,7 @@ app.MapPut("/api/presentations/{id:guid}", (Guid id,
             SourceReference = presentation.SourceReference,
             TargetAudience = presentation.TargetAudience,
             Theme = presentation.Theme,
+            ThemeRecommendation = presentation.ThemeRecommendation,
             AspectRatio = presentation.AspectRatio,
             TotalSlides = presentation.Slides.Count,
             CreatedAt = presentation.CreatedAt,
@@ -703,6 +837,21 @@ app.MapGet("/api/presentations/{id:guid}/pdf", (Guid id,
     {
         return Results.Json(new { error = exception.Message }, statusCode: StatusCodes.Status400BadRequest);
     }
+}).AllowAnonymous();
+
+app.MapGet("/api/presentations/{id:guid}/html", (Guid id,
+    PresentationStudioService studio) =>
+{
+    try
+    {
+        var presentation = studio.Get(id);
+        var html = PresentationHtmlExporter.Export(presentation);
+        return Results.File(
+            System.Text.Encoding.UTF8.GetBytes(html),
+            "text/html; charset=utf-8",
+            PresentationHtmlExporter.SafeFileName(presentation.Title));
+    }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
 }).AllowAnonymous();
 
 app.MapDelete("/api/presentations/{id:guid}", (Guid id,

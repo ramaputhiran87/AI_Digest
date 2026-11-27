@@ -18,6 +18,7 @@ public sealed class PresentationSourceProviders(HttpClient httpClient, IConfigur
             "Markdown" or "Text" => await MarkdownAsync(file, cancellationToken),
             "GitHub" => await GitHubAsync(request.SourceReference, cancellationToken),
             "ApplicationUrl" => await ApplicationUrlAsync(request.SourceReference, cancellationToken),
+            "AnalysisResult" => AnalysisResult(request),
             "UseCase" => new PresentationSource
             {
                 SourceType = "UseCase",
@@ -26,6 +27,29 @@ public sealed class PresentationSourceProviders(HttpClient httpClient, IConfigur
                 SourceFiles = ["Use-case description"]
             },
             _ => throw new AnalysisProviderException("Unsupported presentation source type.")
+        };
+    }
+
+    private static PresentationSource AnalysisResult(PresentationRequest request)
+    {
+        var context = request.AnalysisContext?.Trim();
+        if (string.IsNullOrWhiteSpace(context))
+            throw new AnalysisProviderException(
+                "A completed analysis result is required for this presentation source.",
+                failureCode: AnalysisFailureCode.InvalidInput);
+        if (context.Length > 60_000)
+            throw new AnalysisProviderException(
+                "The structured analysis result exceeds the presentation context limit.",
+                failureCode: AnalysisFailureCode.InvalidInput);
+
+        return new PresentationSource
+        {
+            SourceType = "AnalysisResult",
+            SourceReference = string.IsNullOrWhiteSpace(request.SourceReference)
+                ? "Previously completed analysis"
+                : request.SourceReference,
+            Text = context,
+            SourceFiles = [request.SourceReference]
         };
     }
 

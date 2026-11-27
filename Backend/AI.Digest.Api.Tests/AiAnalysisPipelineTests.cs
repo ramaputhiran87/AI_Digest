@@ -188,7 +188,71 @@ public sealed class AiAnalysisPipelineTests
         Assert.Equal(2, client.CallCount);
         Assert.Equal(2, result.ModelInfo?.InferenceCalls);
         Assert.Single(result.AiReport!.Findings);
+        Assert.Single(result.AiReport.Sections);
+        Assert.Equal("SourceConfirmed", result.AiReport.Sections[0].Origin);
         Assert.Equal(3, result.AiReport.Findings[0].Evidence[0].StartLine);
+    }
+
+    [Fact]
+    public async Task DeepAnalysisUsesTheDetailedPipelineAndReportsRealProgress()
+    {
+        var client = new MockAiModelClient();
+        var service = CreateService(client, freeTierMode: true);
+        var progress = new List<AnalysisProgressEvent>();
+
+        await service.AnalyseAsync(
+            "architecture.md",
+            Source,
+            null,
+            analysisDepth: "Deep",
+            progress: new InlineProgress<AnalysisProgressEvent>(progress.Add));
+
+        Assert.Equal(7, client.CallCount);
+        Assert.Contains(progress, item => item.Stage == "Document structure analysis");
+        Assert.Contains(progress, item =>
+            item.Stage == "AI inference" && item.CompletedChunks == 1 && item.TotalChunks == 1);
+        Assert.Contains(progress, item => item.Stage == "Evidence validation");
+        Assert.Contains(progress, item => item.Stage == "Recommendations generation");
+        Assert.Contains(progress, item => item.Stage == "Final report preparation");
+    }
+
+    [Fact]
+    public async Task AnalysisProgressHubReplaysEventsAndCompletesSubscribers()
+    {
+        var hub = new AnalysisProgressHub();
+        var operationId = Guid.NewGuid();
+        var subscription = hub.Subscribe(operationId);
+        hub.Start(operationId);
+        hub.Report(operationId, new AnalysisProgressEvent("AI inference", CompletedInferenceCalls: 1));
+        hub.Report(operationId, new AnalysisProgressEvent("Analysis completed", Completed: true));
+
+        var updates = new List<AnalysisProgressEvent>();
+        await foreach (var update in subscription.ReadUpdatesAsync(CancellationToken.None))
+            updates.Add(update);
+
+        Assert.Equal(
+            ["Document received", "AI inference", "Analysis completed"],
+            updates.Select(update => update.Stage));
+    }
+
+    [Fact]
+    public async Task CancellingAnalysisStopsAnInFlightInference()
+    {
+        var client = new TimeoutAiModelClient("Gemini");
+        var service = CreateService(client);
+        using var cancellation = new CancellationTokenSource();
+        var analysis = service.AnalyseAsync(
+            "architecture.md",
+            Source,
+            null,
+            cancellationToken: cancellation.Token);
+        var timeout = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (client.CallCount == 0 && DateTimeOffset.UtcNow < timeout)
+            await Task.Delay(10);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => analysis);
+
+        Assert.Equal(1, client.CallCount);
     }
 
     [Fact]
@@ -218,7 +282,10 @@ public sealed class AiAnalysisPipelineTests
             null);
 
         Assert.Empty(result.AiReport!.Findings);
-        Assert.Contains("placeholder", result.AiReport.SecurityAssessment, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(result.AiReport.SecurityAssessment);
+        Assert.Empty(result.AiReport.ArchitectureAssessment);
+        Assert.Empty(result.AiReport.ComplianceAssessment);
+        Assert.Empty(result.AiReport.BusinessImpact);
     }
 
     [Fact]
@@ -490,7 +557,7 @@ public sealed class AiAnalysisPipelineTests
     }
 
     private static DocumentAnalysisService CreateService(
-        MockAiModelClient client,
+        IAiModelClient client,
         string providerName = "Gemini",
         bool freeTierMode = false)
     {
@@ -508,15 +575,20 @@ public sealed class AiAnalysisPipelineTests
 
     private static LlmAnalysisProvider CreateLlmProvider(
         IConfiguration configuration,
-        IEnumerable<IAiModelClient> clients) =>
-        new(
+        IEnumerable<IAiModelClient> clients)
+    {
+        var healthTracker = new AiProviderHealthTracker();
+        return new LlmAnalysisProvider(
             configuration,
             new AiInferenceRouter(
                 new AiProviderConfiguration(configuration),
                 clients,
-                new AiProviderHealthTracker(),
+                healthTracker,
                 NullLogger<AiInferenceRouter>.Instance),
-            new AiProviderConfiguration(configuration));
+            new AiProviderConfiguration(configuration),
+                healthTracker,
+                new AiInferenceConcurrencyGate(configuration));
+    }
 
     private static IConfiguration CreateFallbackConfiguration(
         string providerName = "Configured",
@@ -665,6 +737,26 @@ public sealed class AiAnalysisPipelineTests
                         summary = "An API architecture document."
                     },
                     assessment = "The source documents a finite audit retention period.",
+                    sections = new[]
+                    {
+                        new
+                        {
+                            id = "audit-retention",
+                            title = "Audit retention",
+                            type = "requirement",
+                            content = "The API retains audit events for 90 days.",
+                            origin = "SourceConfirmed",
+                            evidence = new[]
+                            {
+                                new
+                                {
+                                    quotation = "The API stores audit events for 90 days.",
+                                    startLine = 3,
+                                    endLine = 3
+                                }
+                            }
+                        }
+                    },
                     findings = noFindings ? Array.Empty<object>() : new object[]
                     {
                         new
@@ -749,6 +841,7 @@ public sealed class AiAnalysisPipelineTests
         private static string BuildReport(bool inventEvidence, bool noFindings) =>
             JsonSerializer.Serialize(new
             {
+                sourceType = "Technical documentation",
                 executiveSummary = "The architecture document describes an API with 90-day audit event retention; confirm that this meets the applicable operational and regulatory requirements.",
                 documentUnderstanding = new
                 {
@@ -760,11 +853,31 @@ public sealed class AiAnalysisPipelineTests
                     summary = "An API architecture document."
                 },
                 securityAssessment = noFindings
-                    ? "The supplied value is clearly a placeholder; no security finding is supported."
+                    ? ""
                     : "Audit event retention is documented; no live vulnerability can be verified from this document.",
-                architectureAssessment = "The source provides limited architecture details.",
-                complianceAssessment = "The document does not identify a retention policy.",
-                businessImpact = "Retention may affect investigations and compliance obligations.",
+                architectureAssessment = noFindings ? "" : "The source provides limited architecture details.",
+                complianceAssessment = noFindings ? "" : "The document does not identify a retention policy.",
+                businessImpact = noFindings ? "" : "Retention may affect investigations and compliance obligations.",
+                sections = noFindings ? Array.Empty<object>() : new object[]
+                {
+                    new
+                    {
+                        id = "audit-retention",
+                        title = "Audit retention",
+                        type = "requirement",
+                        content = "The API retains audit events for 90 days.",
+                        origin = "SourceConfirmed",
+                        evidence = new[]
+                        {
+                            new
+                            {
+                                quotation = "The API stores audit events for 90 days.",
+                                startLine = 3,
+                                endLine = 3
+                            }
+                        }
+                    }
+                },
                 findings = noFindings ? Array.Empty<object>() : new object[]
                 {
                     new
@@ -794,8 +907,8 @@ public sealed class AiAnalysisPipelineTests
                         severityReason = "Impact depends on the organization's retention obligations."
                     }
                 },
-                priorityActionPlan = new[] { "Validate the required audit retention period." },
-                overallAssessment = "The source supports a review action, not a confirmed security vulnerability."
+                priorityActionPlan = noFindings ? Array.Empty<string>() : ["Validate the required audit retention period."],
+                overallAssessment = noFindings ? "" : "The source supports a review action, not a confirmed security vulnerability."
             });
     }
 }

@@ -7,7 +7,9 @@ public record AnalyseTextRequest(
     string? AnalysisMode = null,
     bool AllowCloudProcessing = false,
     string? CloudConsentScope = null,
-    string? CloudConsentPolicyVersion = null);
+    string? CloudConsentPolicyVersion = null,
+    string? AnalysisDepth = null,
+    Guid? ProgressId = null);
 
 public sealed class ParsedDocument
 {
@@ -140,8 +142,10 @@ public sealed record AiProviderUsage(
 
 public sealed class AiAnalysisReport
 {
+    public string SourceType { get; init; } = "";
     public string ExecutiveSummary { get; init; } = "";
     public DocumentUnderstanding DocumentUnderstanding { get; init; } = new();
+    public List<AnalysisContentSection> Sections { get; init; } = [];
     public string SecurityAssessment { get; init; } = "";
     public string ArchitectureAssessment { get; init; } = "";
     public string ComplianceAssessment { get; init; } = "";
@@ -149,6 +153,16 @@ public sealed class AiAnalysisReport
     public List<AiFinding> Findings { get; init; } = [];
     public List<string> PriorityActionPlan { get; init; } = [];
     public string OverallAssessment { get; init; } = "";
+}
+
+public sealed class AnalysisContentSection
+{
+    public string Id { get; init; } = "";
+    public string Title { get; init; } = "";
+    public string Type { get; init; } = "";
+    public string Content { get; init; } = "";
+    public string Origin { get; init; } = "";
+    public List<AiEvidence> Evidence { get; init; } = [];
 }
 
 public sealed class DocumentUnderstanding

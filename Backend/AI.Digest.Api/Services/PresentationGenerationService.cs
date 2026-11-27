@@ -13,18 +13,18 @@ namespace AI.Digest.Api.Services;
 
 public sealed class PresentationGenerationService
 {
-    private static readonly string Navy = "142B52";
-    private static readonly string Blue = "2563EB";
-    private static readonly string Yellow = "FFC928";
-    private static readonly string White = "FFFFFF";
+    private sealed record ThemePalette(string Background, string Text, string Muted, string Accent, string Card);
 
     public Models.PresentationDocument Validate(Models.PresentationDocument presentation)
     {
         if (presentation.Slides.Count is < 1 or > 30)
             throw new AnalysisProviderException("A presentation must contain 1 to 30 slides.");
+        var sectionIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var slide in presentation.Slides)
         {
-            if (string.IsNullOrWhiteSpace(slide.Title))
+            if (string.IsNullOrWhiteSpace(slide.SectionId) ||
+                !sectionIds.Add(slide.SectionId) ||
+                string.IsNullOrWhiteSpace(slide.Title))
                 throw new AnalysisProviderException("Every slide must have a title.");
             if (slide.Content.Count > 5)
                 throw new AnalysisProviderException($"Slide '{slide.Title}' exceeds five content bullets.");
@@ -80,7 +80,11 @@ public sealed class PresentationGenerationService
             {
                 var slide = presentation.Slides[index];
                 var slidePart = presentationPart.AddNewPart<SlidePart>("rId" + (index + 2));
-                slidePart.Slide = CreateSlide(slide, index == 0, presentation.AspectRatio);
+                slidePart.Slide = CreateSlide(
+                    slide,
+                    index == 0,
+                    presentation.AspectRatio,
+                    GetPalette(presentation.Theme));
                 slidePart.AddPart(layoutPart);
 
                 slideIdList.Append(new SlideId
@@ -96,7 +100,11 @@ public sealed class PresentationGenerationService
         return stream.ToArray();
     }
 
-    private static P.Slide CreateSlide(PresentationSlide slide, bool titleSlide, string aspectRatio)
+    private static P.Slide CreateSlide(
+        PresentationSlide slide,
+        bool titleSlide,
+        string aspectRatio,
+        ThemePalette palette)
     {
         var wide = aspectRatio != "4:3";
         var shapeTree = new P.ShapeTree();
@@ -106,29 +114,34 @@ public sealed class PresentationGenerationService
             new ApplicationNonVisualDrawingProperties()));
         shapeTree.Append(new GroupShapeProperties(new A.TransformGroup()));
 
-        shapeTree.Append(CreateBackground(wide));
+        shapeTree.Append(CreateBackground(wide, palette.Background));
         shapeTree.Append(CreateTextBox(620000, 250000, 10000000, 650000, slide.Title,
-            titleSlide ? 34 : 28, Navy, true));
+            titleSlide ? 34 : 28, palette.Text, true));
 
         if (!string.IsNullOrWhiteSpace(slide.Subtitle))
         {
             shapeTree.Append(CreateTextBox(620000, 920000, 10500000, 420000, slide.Subtitle,
-                16, "64748B", false));
+                16, palette.Muted, false));
         }
 
         if (titleSlide)
         {
-            shapeTree.Append(CreateTextBox(620000, 2300000, 10800000, 500000,
-                "Enterprise Intelligence Presentation", 18, Blue, false));
-            shapeTree.Append(CreateAccentLine(620000, 3100000, 1800000));
+            var y = 2300000;
+            foreach (var item in slide.Content.Take(3))
+            {
+                shapeTree.Append(CreateTextBox(720000, y, 670000, 500000, "", 16, palette.Accent, true, palette.Accent));
+                shapeTree.Append(CreateTextBox(1450000, y - 30000, 9300000, 650000, item, 16, palette.Text, false));
+                y += 780000;
+            }
+            shapeTree.Append(CreateAccentLine(620000, y + 100000, 1800000, palette.Accent));
         }
         else
         {
             var y = 1550000;
             foreach (var item in slide.Content.Take(5))
             {
-                shapeTree.Append(CreateTextBox(720000, y, 670000, 500000, "", 16, Blue, true, Yellow));
-                shapeTree.Append(CreateTextBox(1450000, y - 30000, 9300000, 650000, item, 16, "172B4D", false));
+                shapeTree.Append(CreateTextBox(720000, y, 670000, 500000, "", 16, palette.Accent, true, palette.Accent));
+                shapeTree.Append(CreateTextBox(1450000, y - 30000, 9300000, 650000, item, 16, palette.Text, false));
                 y += 780000;
             }
 
@@ -140,29 +153,29 @@ public sealed class PresentationGenerationService
                 foreach (var visual in slide.VisualElements.Take(3))
                 {
                     shapeTree.Append(CreateCard(cardX, cardY, cardWidth, 1100000,
-                        visual.Label, visual.Value));
+                        visual.Label, visual.Value, palette));
                     cardX += cardWidth + 250000;
                 }
             }
 
-            if (slide.Diagram is not null && !string.IsNullOrWhiteSpace(slide.Diagram.Mermaid))
+            var diagram = slide.Diagram;
+            if (diagram is not null && !string.IsNullOrWhiteSpace(diagram.Mermaid))
             {
                 shapeTree.Append(CreateTextBox(780000, 5200000, 10400000, 650000,
-                    "Diagram: " + (slide.Diagram.Type ?? "Architecture") + " — " + slide.Diagram.Mermaid.Replace("\n", " "),
-                    11, "64748B", false));
+                    "Diagram: " + (diagram.Type ?? "Architecture") + " — " + diagram.Mermaid.Replace("\n", " "),
+                    11, palette.Muted, false));
             }
         }
 
         shapeTree.Append(CreateTextBox(10880000, 6300000, 850000, 260000,
-            slide.SlideNumber.ToString(), 10, "94A3B8", false));
+            slide.SlideNumber.ToString(), 10, palette.Muted, false));
 
         return new P.Slide(new CommonSlideData(shapeTree), new P.ColorMapOverride(new A.MasterColorMapping()));
     }
 
-    private static P.Shape CreateBackground(bool wide)
+    private static P.Shape CreateBackground(bool wide, string color)
     {
-        var shape = CreateTextBox(0, 0, wide ? 12192000 : 9144000, 6858000, "", 1, White, false);
-        shape.ShapeProperties.Append(new A.SolidFill(new A.SchemeColor { Val = A.SchemeColorValues.Background1 }));
+        var shape = CreateTextBox(0, 0, wide ? 12192000 : 9144000, 6858000, "", 1, color, false, color);
         return shape;
     }
 
@@ -191,7 +204,9 @@ public sealed class PresentationGenerationService
 
         var paragraph = new A.Paragraph();
         var run = new A.Run();
-        run.Append(new A.RunProperties {         Language = "en-US", FontSize = fontSize * 100, Bold = bold });        run.RunProperties.Append(new A.SolidFill(new A.RgbColorModelHex { Val = color }));
+        var runProperties = new A.RunProperties { Language = "en-US", FontSize = fontSize * 100, Bold = bold };
+        runProperties.Append(new A.SolidFill(new A.RgbColorModelHex { Val = color }));
+        run.Append(runProperties);
         run.Append(new A.Text { Text = text });
         paragraph.Append(run);
         var textBody = new P.TextBody(
@@ -202,16 +217,24 @@ public sealed class PresentationGenerationService
         return shape;
     }
 
-    private static P.Shape CreateCard(long x, long y, long cx, long cy, string label, string value) =>
-        CreateTextBox(x, y, cx, cy, $"{label}\n{value}", 14, Navy, true, "F4F7FC");
+    private static P.Shape CreateCard(
+        long x,
+        long y,
+        long cx,
+        long cy,
+        string label,
+        string value,
+        ThemePalette palette) =>
+        CreateTextBox(x, y, cx, cy, $"{label}\n{value}", 14, palette.Text, true, palette.Card);
 
-    private static P.Shape CreateAccentLine(long x, long y, long cx) =>
-        CreateTextBox(x, y, cx, 70000, "", 1, Yellow, false, Yellow);
+    private static P.Shape CreateAccentLine(long x, long y, long cx, string color) =>
+        CreateTextBox(x, y, cx, 70000, "", 1, color, false, color);
 
     public byte[] GeneratePdf(Models.PresentationDocument presentation)
     {
         presentation = Validate(presentation);
         QuestPDF.Settings.License = LicenseType.Community;
+        var palette = GetPalette(presentation.Theme);
         var document = Document.Create(container =>
         {
             foreach (var slide in presentation.Slides)
@@ -221,22 +244,22 @@ public sealed class PresentationGenerationService
                     var isWide = presentation.AspectRatio != "4:3";
                     page.Size(isWide ? PageSizes.A4.Landscape() : PageSizes.A4.Portrait());
                     page.Margin(28);
-                    page.DefaultTextStyle(x => x.FontFamily("Aptos").FontColor("172B4D").FontSize(13));
-                    page.Background(Colors.White);
+                    page.DefaultTextStyle(x => x.FontFamily("Aptos").FontColor(palette.Text).FontSize(13));
+                    page.PageColor(palette.Background);
                     page.Header().Height(54).Row(row =>
                     {
-                        row.RelativeItem().Text(slide.Title).FontSize(24).SemiBold().FontColor(Navy);
+                        row.RelativeItem().Text(slide.Title).FontSize(24).SemiBold().FontColor(palette.Text);
                         row.ConstantItem(28).AlignRight().Text(slide.SlideNumber.ToString()).FontSize(9).FontColor(Colors.Grey.Lighten1);
                     });
                     page.Content().Column(column =>
                     {
                         if (!string.IsNullOrWhiteSpace(slide.Subtitle))
-                            column.Item().PaddingBottom(16).Text(slide.Subtitle).FontSize(12).FontColor("64748B");
+                            column.Item().PaddingBottom(16).Text(slide.Subtitle).FontSize(12).FontColor(palette.Muted);
                         foreach (var item in slide.Content)
                         {
                             column.Item().PaddingBottom(9).Row(row =>
                             {
-                                row.ConstantItem(8).Height(8).Background(Yellow).CornerRadius(4);
+                                row.ConstantItem(8).Height(8).Background(palette.Accent).CornerRadius(4);
                                 row.RelativeItem().PaddingLeft(8).Text(item).FontSize(14);
                             });
                         }
@@ -246,17 +269,18 @@ public sealed class PresentationGenerationService
                             {
                                 foreach (var visual in slide.VisualElements.Take(3))
                                 {
-                                    row.RelativeItem().PaddingRight(8).Background("F4F7FC").CornerRadius(8).Padding(14).Column(card =>
+                                    row.RelativeItem().PaddingRight(8).Background(palette.Card).CornerRadius(8).Padding(14).Column(card =>
                                     {
-                                        card.Item().Text(visual.Label).FontSize(9).FontColor("64748B");
-                                        card.Item().Text(visual.Value).FontSize(16).SemiBold().FontColor(Navy);
+                                        card.Item().Text(visual.Label).FontSize(9).FontColor(palette.Muted);
+                                        card.Item().Text(visual.Value).FontSize(16).SemiBold().FontColor(palette.Text);
                                     });
                                 }
                             });
                         }
-                        if (slide.Diagram is not null)
+                        var diagram = slide.Diagram;
+                        if (diagram is not null)
                             column.Item().PaddingTop(16).Border(1).BorderColor("E7EDF5").CornerRadius(8).Padding(12)
-                                .Text($"{slide.Diagram.Type} diagram: {slide.Diagram.Mermaid}").FontSize(9).FontColor("64748B");
+                                .Text($"{diagram.Type} diagram: {diagram.Mermaid}").FontSize(9).FontColor(palette.Muted);
                     });
                     page.Footer().Height(20).AlignRight().Text($"AI Document Digest  •  {slide.LayoutType}")
                         .FontSize(8).FontColor("64748B");
@@ -264,5 +288,25 @@ public sealed class PresentationGenerationService
             }
         });
         return document.GeneratePdf();
+    }
+
+    private static ThemePalette GetPalette(string? theme)
+    {
+        var value = (theme ?? "").ToLowerInvariant();
+        if (value.Contains("neural") || value.Contains("dark"))
+            return new("080D1B", "F4F8FF", "C1D0E7", "24D8F2", "111D38");
+        if (value.Contains("cinematic"))
+            return new("17171D", "FFFAF3", "D0C7BC", "E2C47D", "302D34");
+        if (value.Contains("gold"))
+            return new("071326", "FFF9EB", "D1C9B8", "E2C47D", "182944");
+        if (value.Contains("blueprint") || value.Contains("technology"))
+            return new("082243", "EEF8FF", "BDD5E8", "70C4FF", "0B2C52");
+        if (value.Contains("universe"))
+            return new("100D25", "F7F3FF", "D2C8E8", "BCA3FF", "231943");
+        if (value.Contains("storytelling"))
+            return new("FBF4E9", "2B2B30", "655A51", "9C5D36", "FFFFFF");
+        if (value.Contains("light") || value.Contains("minimal"))
+            return new("FFFFFF", "142B52", "64748B", "2563EB", "F4F7FC");
+        return new("F7F9FD", "142B52", "64748B", "FFC928", "F4F7FC");
     }
 }

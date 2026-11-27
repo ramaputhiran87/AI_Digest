@@ -145,7 +145,8 @@ public sealed class AiInferenceRouter(
                     T value;
                     try
                     {
-                        value = JsonSerializer.Deserialize<T>(inference.Content, JsonOptions)
+                        var jsonContent = NormalizeJsonResponse(inference.Content);
+                        value = JsonSerializer.Deserialize<T>(jsonContent, JsonOptions)
                                 ?? throw new JsonException("The response was JSON null.");
                         value = validate is null ? value : validate(value);
                     }
@@ -285,4 +286,33 @@ public sealed class AiInferenceRouter(
             ? TimeSpan.FromSeconds(Math.Clamp(
                 delay.TotalSeconds, 0, configuration.RequestTimeoutSeconds))
             : TimeSpan.FromMilliseconds(Math.Min(500 * Math.Pow(2, attempt), 4000));
+
+    private static string NormalizeJsonResponse(string content)
+    {
+        var trimmed = content.Trim();
+        if (trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            var newline = trimmed.IndexOf('\n');
+            if (newline >= 0)
+                trimmed = trimmed[(newline + 1)..].Trim();
+            if (trimmed.EndsWith("```", StringComparison.Ordinal))
+                trimmed = trimmed[..^3].Trim();
+        }
+
+        if (trimmed.StartsWith('{') || trimmed.StartsWith('['))
+            return trimmed;
+
+        var objectStart = trimmed.IndexOf('{');
+        var arrayStart = trimmed.IndexOf('[');
+        var start = objectStart >= 0 && (arrayStart < 0 || objectStart < arrayStart)
+            ? objectStart
+            : arrayStart;
+        if (start < 0)
+            return trimmed;
+
+        var objectEnd = trimmed.LastIndexOf('}');
+        var arrayEnd = trimmed.LastIndexOf(']');
+        var end = Math.Max(objectEnd, arrayEnd);
+        return end >= start ? trimmed[start..(end + 1)] : trimmed;
+    }
 }
